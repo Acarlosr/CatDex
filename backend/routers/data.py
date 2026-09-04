@@ -73,8 +73,8 @@ async def fetch_historical_data(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Error in manual sync: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Error in manual sync: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to fetch historical data from the exchange.")
 
 
 def _fetch_and_save_data(formatted_symbol: str, exchange_id: str, req: HistoricalDataFetch):
@@ -335,4 +335,5 @@ def get_market_info(symbol: str, exchange: str = "okx"):
         _ticker_cache[cache_key] = (now, result)
         return result
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to fetch market info: {str(e)}")
+        logger.warning("Failed to fetch market info for '%s' on '%s': %s", symbol, exchange, type(e).__name__)
+        raise HTTPException(status_code=400, detail="Failed to fetch market info from the exchange.")

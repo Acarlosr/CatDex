@@ -7,7 +7,10 @@ services:
       - "8000:8000"
     volumes:
       - ./data:/app/data
-      - ./backend:/app/backend
+      - ./backend:/app/backend:ro
+    environment:
+      # Group that keeps read access to data/.env on the host
+      - HOST_GID=${HOST_GID:-1000}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,ssl; urllib.request.urlopen('https://localhost:8000/health', context=ssl._create_unverified_context())"]

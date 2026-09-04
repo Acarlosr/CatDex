@@ -13,19 +13,43 @@ if [ ! -f /app/data/.env ]; then
     # Default to localhost; override with VITE_API_BASE_URL env var for LAN access.
     BASE_URL="${VITE_API_BASE_URL:-https://localhost:8000}"
 
+    # Allow the frontend origin (port 5173) on the same host as the API
+    API_HOST=$(echo "$BASE_URL" | sed 's|.*://||;s|:.*||;s|/.*||')
+    CORS_LIST="https://localhost:5173,https://127.0.0.1:5173"
+    if [ -n "$API_HOST" ] && [ "$API_HOST" != "localhost" ] && [ "$API_HOST" != "127.0.0.1" ]; then
+        CORS_LIST="${CORS_LIST},https://${API_HOST}:5173"
+    fi
+
+    umask 177
     cat > /app/data/.env <<EOF
 MASTER_API_KEY=${API_KEY}
 DATABASE_URL=sqlite:///./data/ApexAlgoDB.sqlite3
 ENCRYPTION_KEY=${ENC_KEY}
 VITE_API_BASE_URL=${BASE_URL}
-VITE_API_KEY=${API_KEY}
+CORS_ORIGINS=${CORS_LIST}
 EOF
+    umask 022
     echo "[backend] Generated new .env"
     echo "[backend] VITE_API_BASE_URL=${BASE_URL}"
     echo "[backend] For LAN access, edit data/.env and restart"
+    echo "[backend] Enter the MASTER_API_KEY from data/.env in the web UI to log in"
 else
     echo "[backend] Using existing .env"
+    # Older .env files predate CORS_ORIGINS — derive it from VITE_API_BASE_URL
+    # so LAN deployments keep working without a manual edit.
+    if ! grep -q '^CORS_ORIGINS=' /app/data/.env; then
+        API_HOST=$(grep '^VITE_API_BASE_URL=' /app/data/.env | sed 's|.*://||;s|:.*||;s|/.*||' || true)
+        CORS_LIST="https://localhost:5173,https://127.0.0.1:5173"
+        if [ -n "$API_HOST" ] && [ "$API_HOST" != "localhost" ] && [ "$API_HOST" != "127.0.0.1" ]; then
+            CORS_LIST="${CORS_LIST},https://${API_HOST}:5173"
+        fi
+        printf '\nCORS_ORIGINS=%s\n' "$CORS_LIST" >> /app/data/.env
+        echo "[backend] Added CORS_ORIGINS=${CORS_LIST} to existing .env"
+    fi
 fi
+
+# .env holds the master API key and encryption key — keep it private
+chmod 600 /app/data/.env
 
 # ── 2. Generate SSL certs if missing ──
 if [ ! -f /app/data/cert/cert.pem ] || [ ! -f /app/data/cert/key.pem ]; then
@@ -55,9 +79,23 @@ fi
 ln -sf /app/data/.env /app/.env
 ln -sf /app/data/cert /app/.cert
 
-echo "[backend] Starting on https://0.0.0.0:8000"
+# ── 3. Drop privileges ──
+# The container starts as root so it can fix ownership of the mounted
+# data volume, then runs the app as the unprivileged 'apex' user.
+# Keep .env group-readable for the host user: docker compose auto-loads
+# the repo-root .env symlink, and the owner needs to read MASTER_API_KEY.
+# HOST_GID comes from compose; the stat fallback only works on first run,
+# before the volume has been chowned to apex.
+HOST_GID="${HOST_GID:-$(stat -c %g /app/data)}"
+chown -R apex:apex /app/data
+if [ "$HOST_GID" != "0" ] && [ "$HOST_GID" != "10001" ]; then
+    chown apex:"$HOST_GID" /app/data/.env
+    chmod 640 /app/data/.env
+fi
+
+echo "[backend] Starting on https://0.0.0.0:8000 (user: apex)"
 echo "[backend] NOTE: --reload is disabled. After editing backend files, run: docker compose restart backend"
-exec uvicorn backend.main:app \
+exec gosu apex uvicorn backend.main:app \
     --host 0.0.0.0 --port 8000 \
     --ssl-keyfile /app/.cert/key.pem \
     --ssl-certfile /app/.cert/cert.pem \

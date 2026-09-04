@@ -13,9 +13,23 @@ from backend.core.database import get_db
 from backend.models.positions import Position
 from backend.models.orders import Order
 from backend.models.candles import Candle
+from backend.models.bots import BotConfig
+from backend.models.exchange_keys import ExchangeKey
 from backend.core.security import verify_api_key
+from backend.core.exchange_registry import build_exchange_from_key
+from backend.engine.bot_manager import bot_manager
 
 logger = logging.getLogger("apexalgo.trades")
+
+
+def _invalidate_drawdown_cache(bot_names):
+    """Drop cached drawdown state for the given bots so it is rebuilt from the DB."""
+    cache = getattr(bot_manager, "_drawdown_cache", None)
+    if not isinstance(cache, dict):
+        return
+    names = {n for n in bot_names if n}
+    for key in [k for k in list(cache) if isinstance(k, tuple) and k and k[0] in names]:
+        cache.pop(key, None)
 
 router = APIRouter(
     prefix="/api/trades",
@@ -167,6 +181,7 @@ def delete_bot_trades(bot_name: str, mode: Optional[str] = None, db: Session = D
     pos_deleted = pos_query.delete(synchronize_session=False)
 
     db.commit()
+    _invalidate_drawdown_cache([bot_name])
     return {"message": f"Deleted {orders_deleted} orders and {pos_deleted} positions for '{bot_name}' in mode: {mode or 'ALL'}."}
 
 @router.delete("/positions/{position_id}")
@@ -175,10 +190,12 @@ def delete_historical_position(position_id: int, db: Session = Depends(get_db)):
     if not pos:
         raise HTTPException(status_code=404, detail="Position not found")
 
+    bot_name = pos.bot_name
     try:
         db.query(Order).filter(Order.position_id == position_id).delete()
         db.delete(pos)
         db.commit()
+        _invalidate_drawdown_cache([bot_name])
         return {"status": "success", "message": "Trade permanently deleted."}
     except Exception as e:
         db.rollback()
@@ -191,14 +208,60 @@ def bulk_delete_positions(ids: list[int] = Body(...), db: Session = Depends(get_
     if not ids:
         return {"deleted": 0}
     try:
+        bot_names = [r[0] for r in db.query(Position.bot_name).filter(Position.id.in_(ids)).distinct().all()]
         db.query(Order).filter(Order.position_id.in_(ids)).delete(synchronize_session=False)
         deleted = db.query(Position).filter(Position.id.in_(ids)).delete(synchronize_session=False)
         db.commit()
+        _invalidate_drawdown_cache(bot_names)
         return {"deleted": deleted}
     except Exception as e:
         db.rollback()
         logger.error("Bulk delete failed: %s", e)
         raise HTTPException(status_code=500, detail="Failed to delete trades.")
+
+def _execute_live_close(pos: Position, db: Session):
+    """Place a real market order on the exchange to close a live position.
+
+    Returns (fill_price, filled_amount, exit_fee, exchange_order_id).
+    Raises HTTPException if the order cannot be placed or is not filled.
+    """
+    bot = db.query(BotConfig).filter(BotConfig.name == pos.bot_name).first()
+    key_name = (bot.settings or {}).get("api_key_name") if bot else None
+    if not key_name:
+        raise HTTPException(status_code=400, detail="No API key is linked to this bot; cannot close a live position on the exchange.")
+
+    key_record = db.query(ExchangeKey).filter(ExchangeKey.name == key_name).first()
+    if not key_record:
+        raise HTTPException(status_code=400, detail=f"API key '{key_name}' no longer exists; cannot close a live position on the exchange.")
+
+    ccxt_symbol = pos.symbol.replace('-', '/').upper()
+    close_side = "sell" if pos.side == "long" else "buy"
+
+    try:
+        exchange = build_exchange_from_key(key_record)
+        close_qty = float(exchange.amount_to_precision(ccxt_symbol, pos.amount))
+        if close_qty <= 0:
+            raise HTTPException(status_code=400, detail="Position amount rounds to zero at exchange precision; cannot place a close order.")
+        exch_order = exchange.create_order(ccxt_symbol, "market", close_side, close_qty)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Live close order failed for position %d (%s %s): %s", pos.id, close_side, ccxt_symbol, e, exc_info=True)
+        raise HTTPException(status_code=502, detail="Exchange rejected the close order. Position remains open.")
+
+    if exch_order.get("status") != "closed":
+        logger.warning("Live close order for position %d not filled (status=%s)", pos.id, exch_order.get("status"))
+        raise HTTPException(status_code=502, detail="Close order was not filled on the exchange. Position remains open.")
+
+    fill_price = exch_order.get("average") or exch_order.get("price")
+    if not fill_price:
+        latest_candle = db.query(Candle).filter(Candle.symbol == pos.symbol, Candle.exchange == (pos.exchange or "okx")).order_by(Candle.timestamp.desc()).first()
+        fill_price = latest_candle.close if latest_candle else pos.entry_price
+
+    filled_amount = float(exch_order.get("filled") or close_qty)
+    exit_fee = float((exch_order.get("fee") or {}).get("cost", 0) or 0)
+    return float(fill_price), filled_amount, exit_fee, exch_order.get("id")
+
 
 @router.post("/positions/{position_id}/close")
 def force_close_position(position_id: int, db: Session = Depends(get_db)):
@@ -221,34 +284,57 @@ def force_close_position(position_id: int, db: Session = Depends(get_db)):
         # Refresh to get the updated state
         db.refresh(pos)
 
-        # Use the most recent candle close price to calculate realised PnL
-        latest_candle = db.query(Candle).filter(Candle.symbol == pos.symbol, Candle.exchange == (pos.exchange or "okx")).order_by(Candle.timestamp.desc()).first()
-        close_price = latest_candle.close if latest_candle else pos.entry_price
+        exit_fee = 0.0
+        exchange_order_id = None
+        close_qty = pos.amount
 
-        profit_abs = (close_price - pos.entry_price) * pos.amount if pos.side == "long" else (pos.entry_price - close_price) * pos.amount
-        profit_pct = ((close_price - pos.entry_price) / pos.entry_price) * 100 if pos.side == "long" else ((pos.entry_price - close_price) / pos.entry_price) * 100
+        if pos.mode == "live":
+            close_price, close_qty, exit_fee, exchange_order_id = _execute_live_close(pos, db)
+        else:
+            # Simulated modes: use the most recent candle close price
+            latest_candle = db.query(Candle).filter(Candle.symbol == pos.symbol, Candle.exchange == (pos.exchange or "okx")).order_by(Candle.timestamp.desc()).first()
+            close_price = latest_candle.close if latest_candle else pos.entry_price
+
+        # Fee-adjusted P&L accumulated on top of earlier partial exits
+        filled_buys = [o for o in (pos.orders or []) if o.side == "buy" and o.status == "filled"]
+        original_amount = sum((o.amount or 0.0) for o in filled_buys) or pos.amount or close_qty
+        total_buy_fees = sum((o.fee or 0.0) for o in filled_buys)
+        entry_fee_portion = total_buy_fees * (close_qty / original_amount) if original_amount > 0 else 0.0
+
+        if pos.side == "long":
+            realized_pnl = (close_price - pos.entry_price) * close_qty - entry_fee_portion - exit_fee
+        else:
+            realized_pnl = (pos.entry_price - close_price) * close_qty - entry_fee_portion - exit_fee
 
         pos.status = "closed"
         pos.closed_at = datetime.now(timezone.utc)
-        pos.profit_abs = profit_abs
-        pos.profit_pct = profit_pct
+        pos.profit_abs = (pos.profit_abs or 0.0) + realized_pnl
+        entry_value = (pos.entry_price or 0.0) * original_amount
+        pos.profit_pct = (pos.profit_abs / entry_value) * 100 if entry_value > 0 else 0.0
 
         close_order = Order(
             position_id=pos.id,
+            exchange=pos.exchange,
             bot_name=pos.bot_name,
             mode=pos.mode,
             symbol=pos.symbol,
             side="sell" if pos.side == "long" else "buy",
             order_type="market",
             price=close_price,
-            amount=pos.amount,
+            amount=close_qty,
+            fee=exit_fee,
             timestamp=datetime.now(timezone.utc),
+            exchange_order_id=exchange_order_id,
             status="filled"
         )
         db.add(close_order)
         db.commit()
+        _invalidate_drawdown_cache([pos.bot_name])
 
         return {"status": "success", "message": f"Position forcefully closed at ${close_price:.2f}"}
+    except HTTPException as e:
+        db.rollback()
+        return JSONResponse(status_code=e.status_code, content={"detail": e.detail})
     except Exception as e:
         db.rollback()
         logger.error("Failed to force close position %d: %s", position_id, e)

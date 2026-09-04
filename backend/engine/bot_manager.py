@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import threading
 import time
 import uuid
 from hashlib import md5
@@ -8,7 +9,7 @@ import pandas as pd
 import ccxt
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
-from sqlalchemy import text, func
+from sqlalchemy import text
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.exc import IntegrityError
 from backend.core.database import SessionLocal
@@ -35,14 +36,31 @@ def _indicator_fingerprint(settings):
     return md5(json.dumps(ind_nodes, sort_keys=True).encode()).hexdigest()
 
 
+def _naive_utc(ts):
+    """SQLite stores naive datetimes; normalize any pandas/tz-aware value to
+    naive UTC so unique constraints and dedup lookups compare consistently."""
+    if ts is None:
+        return None
+    if hasattr(ts, 'to_pydatetime'):
+        ts = ts.to_pydatetime()
+    if getattr(ts, 'tzinfo', None) is not None:
+        ts = ts.astimezone(timezone.utc).replace(tzinfo=None)
+    return ts
+
+
 class BotManager:
     def __init__(self):
         self.running = False
         self.position_states = {}
-        self._position_states_lock = asyncio.Lock()
+        # position_states is mutated from backfill threads and _process_bots
+        # worker threads, so a threading lock (not asyncio) guards it
+        self._position_states_lock = threading.Lock()
         self._drawdown_cache = {}  # (bot_name, mode_group) -> {peak_pnl, running_pnl, max_dd}
         self._deleted_bots = set()  # bot names pending cleanup, skip in processing
         self._backfilling_bots = set()  # bot names currently in backfill, skip in live processing
+        self._candle_locks = defaultdict(asyncio.Lock)  # (exchange, symbol, timeframe) -> serializer
+        self._processed_candles = {}  # (exchange, symbol, timeframe) -> last processed candle ts
+        self._balance_cache = {}  # (key_name, quote_ccy) -> (fetched_at, free_balance)
 
     def _get_drawdown(self, bot_name, db, mode_group="live", starting_capital=1000.0):
         """Return cached drawdown state, lazy-initializing from DB on first access.
@@ -95,14 +113,184 @@ class BotManager:
                 exchange = event_data.get("exchange", "okx")
                 symbol = event_data["symbol"]
                 timeframe = event_data["timeframe"]
-                asyncio.create_task(self._process_bots(exchange, symbol, timeframe))
+                candle_ts = event_data.get("timestamp")
+                asyncio.create_task(self._handle_candle_close(exchange, symbol, timeframe, candle_ts))
             except asyncio.TimeoutError:
                 continue
             except asyncio.CancelledError:
                 break
 
+    async def _handle_candle_close(self, exchange: str, symbol: str, timeframe: str, candle_ts):
+        """Serialize processing per subscription and skip re-published candles.
+        Poll tasks re-emit after a reconnect, so the same candle can arrive twice;
+        without this, two concurrent runs could place duplicate live orders."""
+        key = (exchange, symbol, timeframe)
+        async with self._candle_locks[key]:
+            if candle_ts is not None:
+                prev = self._processed_candles.get(key)
+                if prev is not None and candle_ts <= prev:
+                    return
+            await self._process_bots(exchange, symbol, timeframe)
+            if candle_ts is not None:
+                self._processed_candles[key] = candle_ts
+
     def _get_ccxt_instance(self, api_key_record: ExchangeKey):
         return build_exchange_from_key(api_key_record)
+
+    def _reconcile_order(self, ccxt_inst, order, ccxt_symbol, attempts=5, delay=1.0):
+        """Market orders often report status open/None on creation even though they
+        fill (near-)immediately; poll the exchange until a terminal state is known.
+        Returns the freshest order dict available."""
+        for _ in range(attempts):
+            status = order.get("status")
+            if status in ("canceled", "rejected", "expired"):
+                break
+            if status == "closed" and order.get("filled") is not None:
+                break
+            order_id = order.get("id")
+            if not order_id:
+                break
+            time.sleep(delay)
+            try:
+                refreshed = ccxt_inst.fetch_order(order_id, ccxt_symbol)
+            except Exception as exc:
+                logger.warning("fetch_order %s failed: %s", order_id, exc)
+                continue
+            if refreshed:
+                merged = {k: v for k, v in refreshed.items() if v is not None}
+                order = {**order, **merged}
+        return order
+
+    @staticmethod
+    def _fee_in_quote(fee_info, ccxt_symbol, price):
+        """CCXT fee cost can be denominated in base currency (typical for buys);
+        convert to quote so it can be netted against PnL."""
+        if not fee_info:
+            return 0.0
+        try:
+            cost = float(fee_info.get("cost", 0) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+        currency = fee_info.get("currency")
+        base = ccxt_symbol.split('/')[0] if '/' in ccxt_symbol else None
+        if currency and base and currency.upper() == base.upper() and price:
+            return cost * float(price)
+        return cost
+
+    def _get_live_capital(self, ccxt_inst, api_key_record, ccxt_symbol, bot_name, ttl=30):
+        """Free quote-currency balance on the exchange, cached briefly to spare
+        rate limits. Returns None when the balance cannot be determined so the
+        caller can fall back to the configured capital."""
+        quote = ccxt_symbol.split('/')[-1]
+        cache_key = (api_key_record.name, quote)
+        now = time.monotonic()
+        cached = self._balance_cache.get(cache_key)
+        if cached and (now - cached[0]) < ttl:
+            return cached[1]
+        try:
+            balance = ccxt_inst.fetch_balance()
+            free = None
+            if isinstance(balance.get(quote), dict):
+                free = balance[quote].get("free")
+            if free is None:
+                free = (balance.get("free") or {}).get(quote)
+            if free is not None:
+                free = float(free)
+                self._balance_cache[cache_key] = (now, free)
+                return free
+            logger.warning("No %s balance found for key '%s', sizing from backtest_capital", quote, api_key_record.name)
+            blb.push(bot_name, "WARN", f"Could not read {quote} balance, sizing from backtest_capital")
+        except Exception as exc:
+            logger.warning("fetch_balance failed for key '%s': %s — sizing from backtest_capital", api_key_record.name, exc)
+            blb.push(bot_name, "WARN", f"Balance fetch failed, sizing from backtest_capital: {exc}")
+        return None
+
+    def _close_all_open_positions(self, bot, db, key_records):
+        """Market-close every open non-backtest position for a bot before it is
+        force-stopped. A stopped bot no longer evaluates SL/TP, so leaving live
+        positions open would mean unmanaged, unbounded exposure."""
+        open_positions = db.query(Position).options(selectinload(Position.orders)).filter(
+            Position.bot_name == bot.name,
+            Position.status == "open",
+            Position.mode.in_(["forward_test", "paper", "live"]),
+        ).all()
+        if not open_positions:
+            return
+
+        api_key_record = None
+        if bot.settings.get("api_execution") and bot.settings.get("api_key_name"):
+            api_key_record = key_records.get(bot.settings.get("api_key_name"))
+
+        ccxt_inst = None
+        if api_key_record and any(p.mode in ("paper", "live") for p in open_positions):
+            try:
+                ccxt_inst = self._get_ccxt_instance(api_key_record)
+                ccxt_inst.load_markets()
+            except Exception as exc:
+                logger.error("Could not build exchange client to close positions for '%s': %s", bot.name, exc, exc_info=True)
+
+        now_ts = _naive_utc(datetime.now(timezone.utc))
+        timeframe = bot.settings.get("timeframe")
+
+        for pos in open_positions:
+            last_candle = db.query(Candle.close).filter(
+                Candle.exchange == pos.exchange, Candle.symbol == pos.symbol, Candle.timeframe == timeframe
+            ).order_by(Candle.timestamp.desc()).first()
+            close_price = float(last_candle[0]) if last_candle else pos.entry_price
+
+            close_qty = pos.amount
+            actual_price = close_price
+            actual_fee = 0.0
+            order_id = f"local_{int(time.time())}_{uuid.uuid4().hex[:8]}"
+            ccxt_symbol = pos.symbol.replace('-', '/').upper()
+
+            if pos.mode in ("paper", "live"):
+                if ccxt_inst is None:
+                    logger.error("Cannot close %s position on %s for '%s': no exchange client. Position left open.", pos.mode, pos.symbol, bot.name)
+                    blb.push(bot.name, "ERROR", f"Could not close {pos.mode} position on {pos.symbol}: exchange unavailable — close it manually!")
+                    continue
+                try:
+                    sell_qty = float(ccxt_inst.amount_to_precision(ccxt_symbol, close_qty))
+                    if sell_qty <= 0:
+                        continue
+                    ex_order = ccxt_inst.create_market_sell_order(ccxt_symbol, sell_qty)
+                    ex_order = self._reconcile_order(ccxt_inst, ex_order, ccxt_symbol)
+                    filled_qty = float(ex_order.get("filled") or 0)
+                    if filled_qty <= 0 and ex_order.get("status") != "closed":
+                        db.add(Order(position_id=pos.id, exchange=pos.exchange, bot_name=bot.name, mode=pos.mode, symbol=pos.symbol, side="sell", order_type="market", price=close_price, amount=sell_qty, timestamp=now_ts, exchange_order_id=ex_order.get("id"), status="canceled"))
+                        db.commit()
+                        blb.push(bot.name, "ERROR", f"Forced close on {pos.symbol} did not fill; position left open — close it manually!")
+                        continue
+                    close_qty = filled_qty if filled_qty > 0 else sell_qty
+                    actual_price = ex_order.get("average") or ex_order.get("price") or close_price
+                    order_id = ex_order.get("id") or order_id
+                    actual_fee = self._fee_in_quote(ex_order.get("fee"), ccxt_symbol, actual_price)
+                except Exception as exc:
+                    logger.error("Forced close failed for '%s' on %s: %s", bot.name, pos.symbol, exc, exc_info=True)
+                    blb.push(bot.name, "ERROR", f"Forced close failed on {pos.symbol}: {exc} — close it manually!")
+                    continue
+
+            realized_pnl = (actual_price - pos.entry_price) * close_qty - actual_fee
+            pos.profit_abs = (pos.profit_abs or 0.0) + realized_pnl
+            if pos.entry_price and pos.amount:
+                pos.profit_pct = (pos.profit_pct or 0.0) + ((actual_price - pos.entry_price) / pos.entry_price) * 100 * (close_qty / pos.amount)
+
+            db.add(Order(position_id=pos.id, exchange=pos.exchange, bot_name=bot.name, mode=pos.mode, symbol=pos.symbol, side="sell", order_type="market", price=actual_price, amount=close_qty, timestamp=now_ts, exchange_order_id=order_id, status="filled", fee=actual_fee))
+
+            if close_qty >= pos.amount - 0.00001:
+                pos.status = "closed"
+                pos.closed_at = now_ts
+                with self._position_states_lock:
+                    self.position_states.pop(pos.id, None)
+            else:
+                pos.amount -= close_qty
+                blb.push(bot.name, "WARN", f"Partial forced close on {pos.symbol}: {close_qty} sold, {pos.amount} still open — close it manually!")
+
+            if pos.mode in ("paper", "live"):
+                db.commit()
+
+            logger.info("Forced close [%s] %s: %s @ %s (PnL %+.2f)", pos.mode, pos.symbol, close_qty, actual_price, realized_pnl)
+            blb.push(bot.name, "INFO", f"Forced close [{pos.mode}] {pos.symbol}: {close_qty} @ {actual_price} (PnL {realized_pnl:+.2f})")
 
     def _calculate_trade_amount(self, current_price, bot_settings, current_equity=None):
         if not current_price or current_price <= 0:
@@ -129,32 +317,35 @@ class BotManager:
             trade_amount = investment / current_price
             return max(trade_amount, 0.0001)
 
-    def _check_exits(self, open_position, row_close, row_high, row_low, is_sell_signal, bot_settings, current_atr=0.0):
+    def _check_exits(self, open_position, row_close, row_high, row_low, is_sell_signal, bot_settings, current_atr=0.0, row_open=None):
         trade_settings = bot_settings.get("trade_settings", {})
         entry_settings = trade_settings.get("entry", {})
         events = []
+        if row_open is None:
+            row_open = row_close
 
-        state = self.position_states.get(open_position.id)
-        if not state or state.get('entry_price') != open_position.entry_price:
-            # Restore persisted state from DB, or initialize fresh
-            persisted_highest = open_position.highest_price or open_position.entry_price
-            persisted_exits = set(open_position.triggered_exits or [])
-            self.position_states[open_position.id] = {
-                'entry_price': open_position.entry_price,
-                'highest_price': max(persisted_highest, row_high),
-                'triggered_exits': persisted_exits
-            }
-            state = self.position_states[open_position.id]
-        else:
-            state['highest_price'] = max(state['highest_price'], row_high)
-
-        # Persist state back to DB for crash recovery
-        open_position.highest_price = state['highest_price']
+        with self._position_states_lock:
+            state = self.position_states.get(open_position.id)
+            if not state or state.get('entry_price') != open_position.entry_price:
+                # Restore persisted state from DB, or initialize fresh
+                persisted_highest = open_position.highest_price or open_position.entry_price
+                persisted_exits = set(open_position.triggered_exits or [])
+                state = {
+                    'entry_price': open_position.entry_price,
+                    'highest_price': persisted_highest,
+                    'triggered_exits': persisted_exits
+                }
+                self.position_states[open_position.id] = state
+            # Trailing levels anchor to the peak reached BEFORE this candle; the
+            # current candle's high is folded in afterwards so one candle cannot
+            # both raise the trail and trigger it against its own low.
+            prev_highest = state['highest_price']
+            triggered_exits = set(state['triggered_exits'])
 
         sl_hit = False
         for i, sl in enumerate(entry_settings.get("stop_losses", [])):
             sl_id = f"sl_{i}"
-            if sl_id in state['triggered_exits']: continue
+            if sl_id in triggered_exits: continue
 
             try:
                 sl_val = float(sl.get('value', 0))
@@ -171,10 +362,10 @@ class BotManager:
             if sl_type == 'percentage':
                 trigger_price = open_position.entry_price * (1 - (sl_val/100))
             elif sl_type == 'trailing':
-                trigger_price = state['highest_price'] * (1 - (sl_val/100))
+                trigger_price = prev_highest * (1 - (sl_val/100))
             elif sl_type == 'atr':
                 if not (current_atr > 0): continue
-                trigger_price = state['highest_price'] - (sl_val * current_atr)
+                trigger_price = prev_highest - (sl_val * current_atr)
             else:
                 trigger_price = sl_val
 
@@ -185,7 +376,8 @@ class BotManager:
                     'qty_pct': sl_close_val,
                     'close_amount_type': sl_close_type,
                     'reason': "stop_loss",
-                    'price': trigger_price,
+                    # A gap below the trigger fills at the open, not the trigger
+                    'price': min(trigger_price, row_open),
                     'id': sl_id
                 })
                 sl_hit = True
@@ -194,7 +386,7 @@ class BotManager:
             tps = []
             for i, tp in enumerate(entry_settings.get("take_profits", [])):
                 tp_id = f"tp_{i}"
-                if tp_id in state['triggered_exits']: continue
+                if tp_id in triggered_exits: continue
 
                 try:
                     tp_val = float(tp.get('value', 0))
@@ -214,25 +406,26 @@ class BotManager:
                 if tp_type == 'percentage':
                     t_price = open_position.entry_price * (1 + (tp_val/100))
                     if row_high >= t_price:
-                        tps.append({'id': tp_id, 'price': t_price, 'pct': tp_close_val, 'close_amount_type': tp_close_type})
+                        # A gap above the target fills at the (better) open price
+                        tps.append({'id': tp_id, 'price': max(t_price, row_open), 'pct': tp_close_val, 'close_amount_type': tp_close_type})
                 elif tp_type == 'trailing':
                     # Trailing TP: price must first rise above entry by tp_val%, then
                     # we close when price drops tp_val% from the highest price reached.
                     activation_price = open_position.entry_price * (1 + (tp_val / 100))
-                    if state['highest_price'] >= activation_price:
+                    if prev_highest >= activation_price:
                         # Once activated, trail below the peak
-                        t_price = state['highest_price'] * (1 - (tp_val / 100))
+                        t_price = prev_highest * (1 - (tp_val / 100))
                         if row_low <= t_price:
-                            tps.append({'id': tp_id, 'price': t_price, 'pct': tp_close_val, 'close_amount_type': tp_close_type})
+                            tps.append({'id': tp_id, 'price': min(t_price, row_open), 'pct': tp_close_val, 'close_amount_type': tp_close_type})
                 elif tp_type == 'atr':
                     if not (current_atr > 0): continue
-                    t_price = state['highest_price'] - (tp_val * current_atr)
+                    t_price = prev_highest - (tp_val * current_atr)
                     if row_low <= t_price:
-                        tps.append({'id': tp_id, 'price': t_price, 'pct': tp_close_val, 'close_amount_type': tp_close_type})
+                        tps.append({'id': tp_id, 'price': min(t_price, row_open), 'pct': tp_close_val, 'close_amount_type': tp_close_type})
                 else:
                     t_price = tp_val
                     if row_high >= t_price:
-                        tps.append({'id': tp_id, 'price': t_price, 'pct': tp_close_val, 'close_amount_type': tp_close_type})
+                        tps.append({'id': tp_id, 'price': max(t_price, row_open), 'pct': tp_close_val, 'close_amount_type': tp_close_type})
 
             tps = sorted(tps, key=lambda x: x['price'], reverse=True)
 
@@ -254,6 +447,11 @@ class BotManager:
                 'price': row_close,
                 'id': 'strategy_sell'
             })
+
+        with self._position_states_lock:
+            state['highest_price'] = max(state['highest_price'], row_high)
+            # Persist state back to DB for crash recovery
+            open_position.highest_price = state['highest_price']
 
         return events
 
@@ -324,6 +522,23 @@ class BotManager:
             bt_starting_capital = float(bot.settings.get("backtest_capital", 1000))
             bt_equity = bt_starting_capital  # Available cash (not locked in positions)
             bt_peak_equity = bt_starting_capital
+            bt_max_dd = 0.0  # peak-to-trough on the mark-to-market equity curve
+
+            # Fee and slippage for realistic backtest P&L
+            bt_trade_settings = bot.settings.get("trade_settings", {})
+            bt_entry_fee = float(bt_trade_settings.get("entry", {}).get("fee", 0)) / 100
+            raw_exit_fee = bt_trade_settings.get("exit", {}).get("fee")
+            bt_exit_fee = float(raw_exit_fee) / 100 if raw_exit_fee is not None else bt_entry_fee
+            bt_entry_slippage = float(bt_trade_settings.get("entry", {}).get("slippage", 0)) / 100
+            bt_exit_slippage = float(bt_trade_settings.get("exit", {}).get("slippage", 0)) / 100
+
+            cooldown_trades = int(bot.settings.get("cooldown_trades", 0))
+            cooldown_candles = int(bot.settings.get("cooldown_candles", 0))
+
+            # Per-symbol data prep first (indicators stay per symbol); execution
+            # then runs over one merged timeline so all symbols contend for the
+            # shared capital pool in chronological order.
+            sym_contexts = []
 
             for symbol in symbols:
                 blb.push(bot.name, "INFO", f"Starting: {symbol} | {timeframe} | {live_mode} | lookback={lookback_limit}")
@@ -427,7 +642,7 @@ class BotManager:
                 evaluator.df = df.copy()
                 evaluator._calculate_indicators()
 
-                existing_timestamps = {s[0] for s in db.query(Signal.timestamp).filter(Signal.bot_name == bot.name, Signal.symbol == symbol).all()}
+                existing_timestamps = {_naive_utc(s[0]) for s in db.query(Signal.timestamp).filter(Signal.bot_name == bot.name, Signal.symbol == symbol).all()}
 
                 open_bt_pos = None
                 last_bt_ts = None
@@ -441,193 +656,216 @@ class BotManager:
 
                     open_bt_pos = db.query(Position).filter(Position.bot_name == bot.name, Position.symbol == symbol, Position.mode == "backtest", Position.status == "open").first()
 
-                new_signals = []
-                standard_cols = ['id', 'timestamp', 'open', 'high', 'low', 'close', 'volume', 'atr']
-
                 entry_series = evaluator.resolve_node(bot.settings.get("entry_node")) if bot.settings.get("entry_node") else pd.Series(False, index=evaluator.df.index)
                 exit_series = evaluator.resolve_node(exit_node) if exit_node else pd.Series(False, index=evaluator.df.index)
 
-                cooldown_trades = int(bot.settings.get("cooldown_trades", 0))
-                cooldown_candles = int(bot.settings.get("cooldown_candles", 0))
-                trade_entry_indices = []
-
-                # Fee and slippage for realistic backtest P&L
-                bt_trade_settings = bot.settings.get("trade_settings", {})
-                bt_entry_fee = float(bt_trade_settings.get("entry", {}).get("fee", 0)) / 100
-                raw_exit_fee = bt_trade_settings.get("exit", {}).get("fee")
-                bt_exit_fee = float(raw_exit_fee) / 100 if raw_exit_fee is not None else bt_entry_fee
-                bt_entry_slippage = float(bt_trade_settings.get("entry", {}).get("slippage", 0)) / 100
-                bt_exit_slippage = float(bt_trade_settings.get("exit", {}).get("slippage", 0)) / 100
-
-                # Track original amount for weighted profit_pct calculation
-                original_amount = None
-
                 # Pre-extract numpy arrays once — avoids O(n) .iloc index lookups inside the loop
-                entry_arr = entry_series.values
-                exit_arr  = exit_series.values
-                atr_arr   = evaluator.df['atr'].values if 'atr' in evaluator.df.columns else None
                 _standard_cols = {'id', 'timestamp', 'open', 'high', 'low', 'close', 'volume', 'atr'}
-                indicator_cols = [c for c in evaluator.df.columns if c not in _standard_cols]
+                sym_contexts.append({
+                    "symbol": symbol,
+                    "df": evaluator.df,
+                    "entry_arr": entry_series.values,
+                    "exit_arr": exit_series.values,
+                    "atr_arr": evaluator.df['atr'].values if 'atr' in evaluator.df.columns else None,
+                    "indicator_cols": [c for c in evaluator.df.columns if c not in _standard_cols],
+                    "existing_timestamps": existing_timestamps,
+                    "last_bt_ts": last_bt_ts,
+                    "open_pos": open_bt_pos,
+                    "original_amount": None,  # for weighted profit_pct calculation
+                    "trade_entry_indices": [],
+                    "new_signals": [],
+                    "last_close": None,
+                })
 
-                for index, row in evaluator.df.iterrows():
-                    ts = row['timestamp']
-                    if ts.tzinfo is None: ts = ts.replace(tzinfo=timezone.utc)
+            # ── Merged chronological execution across all symbols ──
+            timeline = []
+            for ci, ctx in enumerate(sym_contexts):
+                for idx, ts_val in enumerate(list(ctx["df"]['timestamp'])):
+                    # Normalize sort keys — legacy rows can be tz-aware while new
+                    # rows are naive, and mixed values are not comparable
+                    timeline.append((_naive_utc(ts_val), ci, idx))
+            timeline.sort(key=lambda t: (t[0], t[1]))
 
-                    current_price = float(row['close'])
-                    current_high = float(row['high'])
-                    current_low = float(row['low'])
-                    just_opened_this_tick = False
+            max_pos = int(bot.settings.get("max_positions", 1))
 
-                    is_buy = bool(entry_arr[index])
-                    is_sell = bool(exit_arr[index])
-                    current_atr = float(atr_arr[index]) if atr_arr is not None and not pd.isna(atr_arr[index]) else 0.0
+            for _ts_key, ci, index in timeline:
+                ctx = sym_contexts[ci]
+                symbol = ctx["symbol"]
+                row = ctx["df"].iloc[index]
+                ts = row['timestamp']
+                if ts.tzinfo is None: ts = ts.replace(tzinfo=timezone.utc)
 
-                    if run_backtest and (last_bt_ts is None or ts > last_bt_ts):
-                        # Capital depletion / max drawdown halt
-                        if bt_equity <= 0:
-                            pass  # Skip trading logic, still generate signals below
-                        else:
-                            max_pos = int(bot.settings.get("max_positions", 1))
+                current_price = float(row['close'])
+                current_open = float(row['open'])
+                current_high = float(row['high'])
+                current_low = float(row['low'])
+                ctx["last_close"] = current_price
+                just_opened_this_tick = False
 
-                            # Cooldown check: block entry if too many trades occurred within the cooldown window
-                            can_buy_cooldown = True
-                            if cooldown_trades > 0 and cooldown_candles > 0:
-                                recent_trades = [idx for idx in trade_entry_indices if (index - idx) < cooldown_candles]
-                                if len(recent_trades) >= cooldown_trades:
-                                    can_buy_cooldown = False
+                is_buy = bool(ctx["entry_arr"][index])
+                is_sell = bool(ctx["exit_arr"][index])
+                atr_arr = ctx["atr_arr"]
+                current_atr = float(atr_arr[index]) if atr_arr is not None and not pd.isna(atr_arr[index]) else 0.0
 
-                            if is_buy and not open_bt_pos and 1 <= max_pos and can_buy_cooldown:
-                                trade_amount = self._calculate_trade_amount(current_price, bot.settings, current_equity=bt_equity)
-                                if trade_amount is None:
-                                    pass  # Not enough capital
-                                else:
-                                    bt_entry_price = current_price * (1 + bt_entry_slippage)
-                                    investment_cost = bt_entry_price * trade_amount
-                                    if investment_cost > bt_equity:
-                                        pass  # Not enough capital for this trade
-                                    else:
-                                        trade_entry_indices.append(index)
-                                        original_amount = trade_amount
-                                        bt_equity -= investment_cost  # Lock capital in position
-                                        open_bt_pos = Position(exchange=exchange_name, bot_name=bot.name, symbol=symbol, mode="backtest", status="open", side="long", entry_price=bt_entry_price, amount=trade_amount, created_at=ts)
-                                        db.add(open_bt_pos)
-                                        db.flush()
-                                        db.add(Order(position_id=open_bt_pos.id, exchange=exchange_name, bot_name=bot.name, mode="backtest", symbol=symbol, side="buy", order_type="market", price=bt_entry_price, amount=trade_amount, timestamp=ts, status="filled", fee=bt_entry_price * trade_amount * bt_entry_fee))
-                                        just_opened_this_tick = True
+                if run_backtest and (ctx["last_bt_ts"] is None or ts > ctx["last_bt_ts"]):
+                    open_bt_pos = ctx["open_pos"]
 
-                            elif open_bt_pos and not just_opened_this_tick:
-                                exit_events = self._check_exits(open_bt_pos, current_price, current_high, current_low, is_sell, bot.settings, current_atr)
+                    # Cooldown check: block entry if too many trades occurred within the cooldown window
+                    can_buy_cooldown = True
+                    if cooldown_trades > 0 and cooldown_candles > 0:
+                        recent_trades = [idx for idx in ctx["trade_entry_indices"] if (index - idx) < cooldown_candles]
+                        if len(recent_trades) >= cooldown_trades:
+                            can_buy_cooldown = False
 
-                                for ev in exit_events:
-                                    if open_bt_pos is None: break
+                    # Capital depletion halt: no new entries, exits keep running
+                    if is_buy and not open_bt_pos and 1 <= max_pos and can_buy_cooldown and bt_equity > 0:
+                        trade_amount = self._calculate_trade_amount(current_price, bot.settings, current_equity=bt_equity)
+                        if trade_amount is not None:
+                            bt_entry_price = current_price * (1 + bt_entry_slippage)
+                            investment_cost = bt_entry_price * trade_amount
+                            total_cost = investment_cost * (1 + bt_entry_fee)
+                            if total_cost <= bt_equity:
+                                ctx["trade_entry_indices"].append(index)
+                                ctx["original_amount"] = trade_amount
+                                bt_equity -= total_cost  # Lock capital + entry fee
+                                open_bt_pos = Position(exchange=exchange_name, bot_name=bot.name, symbol=symbol, mode="backtest", status="open", side="long", entry_price=bt_entry_price, amount=trade_amount, created_at=_naive_utc(ts))
+                                db.add(open_bt_pos)
+                                db.flush()
+                                db.add(Order(position_id=open_bt_pos.id, exchange=exchange_name, bot_name=bot.name, mode="backtest", symbol=symbol, side="buy", order_type="market", price=bt_entry_price, amount=trade_amount, timestamp=_naive_utc(ts), status="filled", fee=investment_cost * bt_entry_fee))
+                                ctx["open_pos"] = open_bt_pos
+                                just_opened_this_tick = True
 
-                                    if ev.get('close_amount_type') == 'fixed':
-                                        close_qty = min(ev['qty_pct'], open_bt_pos.amount)
-                                    else:
-                                        close_qty = open_bt_pos.amount * (ev['qty_pct'] / 100)
-                                    close_qty = min(close_qty, open_bt_pos.amount)
-                                    if close_qty <= 0: continue
+                    elif open_bt_pos and not just_opened_this_tick:
+                        exit_events = self._check_exits(open_bt_pos, current_price, current_high, current_low, is_sell, bot.settings, current_atr, row_open=current_open)
 
-                                    actual_price = ev['price'] * (1 - bt_exit_slippage)
-                                    db.add(Order(position_id=open_bt_pos.id, exchange=exchange_name, bot_name=bot.name, mode="backtest", symbol=symbol, side="sell", order_type="market", price=actual_price, amount=close_qty, timestamp=ts, status="filled", fee=actual_price * close_qty * bt_exit_fee))
+                        for ev in exit_events:
+                            open_bt_pos = ctx["open_pos"]
+                            if open_bt_pos is None: break
 
-                                    entry_cost = open_bt_pos.entry_price * close_qty * (1 + bt_entry_fee)
-                                    exit_proceeds = actual_price * close_qty * (1 - bt_exit_fee)
-                                    realized_pnl = exit_proceeds - entry_cost
-                                    open_bt_pos.profit_abs = (open_bt_pos.profit_abs or 0.0) + realized_pnl
+                            if ev.get('close_amount_type') == 'fixed':
+                                close_qty = min(ev['qty_pct'], open_bt_pos.amount)
+                            else:
+                                close_qty = open_bt_pos.amount * (ev['qty_pct'] / 100)
+                            close_qty = min(close_qty, open_bt_pos.amount)
+                            if close_qty <= 0: continue
 
-                                    # Return sale proceeds to capital pool
-                                    bt_equity += exit_proceeds
+                            actual_price = ev['price'] * (1 - bt_exit_slippage)
+                            db.add(Order(position_id=open_bt_pos.id, exchange=exchange_name, bot_name=bot.name, mode="backtest", symbol=symbol, side="sell", order_type="market", price=actual_price, amount=close_qty, timestamp=_naive_utc(ts), status="filled", fee=actual_price * close_qty * bt_exit_fee))
 
-                                    # Weighted profit_pct: accumulate based on portion of original position closed (fee-adjusted)
-                                    if original_amount and original_amount > 0:
-                                        portion_pct = (realized_pnl / entry_cost) * 100 if entry_cost > 0 else 0.0
-                                        weight = close_qty / original_amount
-                                        open_bt_pos.profit_pct = (open_bt_pos.profit_pct or 0.0) + (portion_pct * weight)
+                            entry_cost = open_bt_pos.entry_price * close_qty * (1 + bt_entry_fee)
+                            exit_proceeds = actual_price * close_qty * (1 - bt_exit_fee)
+                            realized_pnl = exit_proceeds - entry_cost
+                            open_bt_pos.profit_abs = (open_bt_pos.profit_abs or 0.0) + realized_pnl
 
-                                    if open_bt_pos.id in self.position_states:
-                                        self.position_states[open_bt_pos.id]['triggered_exits'].add(ev['id'])
-                                        open_bt_pos.triggered_exits = list(self.position_states[open_bt_pos.id]['triggered_exits'])
+                            # Return sale proceeds to capital pool
+                            bt_equity += exit_proceeds
 
-                                    if close_qty >= open_bt_pos.amount - 0.00001:
-                                        open_bt_pos.status = "closed"
-                                        open_bt_pos.closed_at = ts
-                                        if open_bt_pos.id in self.position_states:
-                                            del self.position_states[open_bt_pos.id]
-                                        open_bt_pos = None
-                                        original_amount = None
-                                    else:
-                                        open_bt_pos.amount -= close_qty
+                            # Weighted profit_pct: accumulate based on portion of original position closed (fee-adjusted)
+                            original_amount = ctx["original_amount"]
+                            if original_amount and original_amount > 0:
+                                portion_pct = (realized_pnl / entry_cost) * 100 if entry_cost > 0 else 0.0
+                                weight = close_qty / original_amount
+                                open_bt_pos.profit_pct = (open_bt_pos.profit_pct or 0.0) + (portion_pct * weight)
 
-                    if ts not in existing_timestamps:
-                        indicators = { col: float(row[col]) for col in indicator_cols if not pd.isna(row[col]) }
-                        if indicators:
-                            action_str = "buy" if is_buy else ("sell" if is_sell else "neutral")
-                            new_signals.append(Signal(candle_id=int(row['id']), symbol=symbol, timestamp=ts, bot_name=bot.name, name="STRATEGY_TICK", action=action_str, extra_data=indicators))
+                            with self._position_states_lock:
+                                if open_bt_pos.id in self.position_states:
+                                    self.position_states[open_bt_pos.id]['triggered_exits'].add(ev['id'])
+                                    open_bt_pos.triggered_exits = list(self.position_states[open_bt_pos.id]['triggered_exits'])
 
-                if run_backtest and open_bt_pos:
-                    if live_mode == "forward_test":
-                        open_bt_pos.mode = "forward_test"
-                        db.query(Order).filter(Order.position_id == open_bt_pos.id).update({"mode": "forward_test"})
-                    else:
-                        # Close trailing backtest position at last price instead of deleting
-                        last_price = float(evaluator.df.iloc[-1]['close'])
-                        remaining_qty = open_bt_pos.amount
-                        last_ts = evaluator.df.iloc[-1]['timestamp']
-                        if last_ts.tzinfo is None: last_ts = last_ts.replace(tzinfo=timezone.utc)
+                            if close_qty >= open_bt_pos.amount - 0.00001:
+                                open_bt_pos.status = "closed"
+                                open_bt_pos.closed_at = _naive_utc(ts)
+                                with self._position_states_lock:
+                                    self.position_states.pop(open_bt_pos.id, None)
+                                ctx["open_pos"] = None
+                                ctx["original_amount"] = None
+                            else:
+                                open_bt_pos.amount -= close_qty
 
-                        entry_cost = open_bt_pos.entry_price * remaining_qty * (1 + bt_entry_fee)
-                        exit_proceeds = last_price * remaining_qty * (1 - bt_exit_fee)
-                        final_pnl = exit_proceeds - entry_cost
+                if _naive_utc(ts) not in ctx["existing_timestamps"]:
+                    indicators = { col: float(row[col]) for col in ctx["indicator_cols"] if not pd.isna(row[col]) }
+                    if indicators:
+                        action_str = "buy" if is_buy else ("sell" if is_sell else "neutral")
+                        ctx["new_signals"].append(Signal(candle_id=int(row['id']), symbol=symbol, timestamp=ts, bot_name=bot.name, name="STRATEGY_TICK", action=action_str, extra_data=indicators))
 
-                        open_bt_pos.profit_abs = (open_bt_pos.profit_abs or 0.0) + final_pnl
-                        if original_amount and original_amount > 0:
-                            portion_pct = (final_pnl / entry_cost) * 100 if entry_cost > 0 else 0.0
-                            weight = remaining_qty / original_amount
-                            open_bt_pos.profit_pct = (open_bt_pos.profit_pct or 0.0) + (portion_pct * weight)
+                # Mark-to-market equity curve: cash + open positions at their last close
+                if run_backtest:
+                    open_value = 0.0
+                    for c2 in sym_contexts:
+                        p2 = c2["open_pos"]
+                        if p2 is not None and c2["last_close"]:
+                            open_value += p2.amount * c2["last_close"]
+                    equity_now = bt_equity + open_value
+                    bt_peak_equity = max(bt_peak_equity, equity_now)
+                    if bt_peak_equity > 0:
+                        bt_max_dd = max(bt_max_dd, ((bt_peak_equity - equity_now) / bt_peak_equity) * 100)
 
-                        open_bt_pos.status = "closed"
-                        open_bt_pos.closed_at = last_ts
-                        bt_equity += exit_proceeds  # Return proceeds to capital pool
-                        db.add(Order(position_id=open_bt_pos.id, exchange=exchange_name, bot_name=bot.name, mode="backtest", symbol=symbol, side="sell", order_type="market", price=last_price, amount=remaining_qty, timestamp=last_ts, status="filled", fee=last_price * remaining_qty * bt_exit_fee))
+            # Close any trailing open backtest positions at the last available price.
+            # Forward test / live must always start flat — a simulated entry must
+            # never become a tracked live position.
+            if run_backtest:
+                for ctx in sym_contexts:
+                    open_bt_pos = ctx["open_pos"]
+                    if not open_bt_pos:
+                        continue
+                    df_s = ctx["df"]
+                    last_price = float(df_s.iloc[-1]['close'])
+                    remaining_qty = open_bt_pos.amount
+                    last_ts = df_s.iloc[-1]['timestamp']
+                    if last_ts.tzinfo is None: last_ts = last_ts.replace(tzinfo=timezone.utc)
 
-                        if open_bt_pos.id in self.position_states:
-                            del self.position_states[open_bt_pos.id]
+                    entry_cost = open_bt_pos.entry_price * remaining_qty * (1 + bt_entry_fee)
+                    exit_proceeds = last_price * remaining_qty * (1 - bt_exit_fee)
+                    final_pnl = exit_proceeds - entry_cost
 
-                    open_bt_pos = None
+                    open_bt_pos.profit_abs = (open_bt_pos.profit_abs or 0.0) + final_pnl
+                    original_amount = ctx["original_amount"]
+                    if original_amount and original_amount > 0:
+                        portion_pct = (final_pnl / entry_cost) * 100 if entry_cost > 0 else 0.0
+                        weight = remaining_qty / original_amount
+                        open_bt_pos.profit_pct = (open_bt_pos.profit_pct or 0.0) + (portion_pct * weight)
 
-                # Commit signals in batches — INSERT OR IGNORE respects the unique constraint
+                    open_bt_pos.status = "closed"
+                    open_bt_pos.closed_at = _naive_utc(last_ts)
+                    bt_equity += exit_proceeds  # Return proceeds to capital pool
+                    db.add(Order(position_id=open_bt_pos.id, exchange=exchange_name, bot_name=bot.name, mode="backtest", symbol=ctx["symbol"], side="sell", order_type="market", price=last_price, amount=remaining_qty, timestamp=_naive_utc(last_ts), status="filled", fee=last_price * remaining_qty * bt_exit_fee))
+
+                    with self._position_states_lock:
+                        self.position_states.pop(open_bt_pos.id, None)
+                    ctx["open_pos"] = None
+
+            # Commit signals in batches — INSERT OR IGNORE respects the unique constraint
+            for ctx in sym_contexts:
+                new_signals = ctx["new_signals"]
                 for i in range(0, len(new_signals), 500):
                     batch = new_signals[i:i+500]
                     for sig in batch:
-                        ts = sig.timestamp
-                        if hasattr(ts, 'to_pydatetime'):
-                            ts = ts.to_pydatetime()
                         db.execute(
                             text("INSERT OR IGNORE INTO signals (candle_id, symbol, timestamp, bot_name, name, action, extra_data) VALUES (:cid, :sym, :ts, :bn, :nm, :act, :ed)"),
-                            {"cid": sig.candle_id, "sym": sig.symbol, "ts": str(ts), "bn": sig.bot_name, "nm": sig.name, "act": sig.action, "ed": json.dumps(sig.extra_data)}
+                            {"cid": sig.candle_id, "sym": sig.symbol, "ts": str(_naive_utc(sig.timestamp)), "bn": sig.bot_name, "nm": sig.name, "act": sig.action, "ed": json.dumps(sig.extra_data)}
                         )
                     db.commit()
-                # Always commit — positions/orders from the backtest loop need to be persisted
-                # even when there are no new signals
-                db.commit()
-                trade_count = len(trade_entry_indices) if run_backtest else 0
-                logger.info("Backfill complete: '%s' on %s | mode=%s | %d candles | %d trades | equity=$%.2f", bot.name, symbol, live_mode.upper(), len(df), trade_count, bt_equity)
-                if run_backtest:
-                    blb.push(bot.name, "INFO", f"Backtest complete: {symbol} | {len(df)} candles | {trade_count} trades | equity=${bt_equity:.2f}")
-                else:
-                    blb.push(bot.name, "INFO", f"Ready: {symbol} | {len(df)} candles | mode={live_mode.upper()}")
+            # Always commit — positions/orders from the backtest loop need to be persisted
+            # even when there are no new signals
+            db.commit()
 
-            # After all symbols processed, check backtest drawdown across the full bot
+            for ctx in sym_contexts:
+                trade_count = len(ctx["trade_entry_indices"]) if run_backtest else 0
+                logger.info("Backfill complete: '%s' on %s | mode=%s | %d candles | %d trades | equity=$%.2f", bot.name, ctx["symbol"], live_mode.upper(), len(ctx["df"]), trade_count, bt_equity)
+                if run_backtest:
+                    blb.push(bot.name, "INFO", f"Backtest complete: {ctx['symbol']} | {len(ctx['df'])} candles | {trade_count} trades | equity=${bt_equity:.2f}")
+                else:
+                    blb.push(bot.name, "INFO", f"Ready: {ctx['symbol']} | {len(ctx['df'])} candles | mode={live_mode.upper()}")
+
+            # After the full chronological run, enforce max drawdown on the
+            # mark-to-market equity curve before the bot is allowed to go live
             if run_backtest:
                 max_drawdown_pct = float(bot.settings.get("max_drawdown", 0))
                 if max_drawdown_pct > 0:
                     self._drawdown_cache.pop((bot.name, "backtest"), None)
-                    bt_capital = float(bot.settings.get("backtest_capital", 1000))
-                    bt_dd = self._get_drawdown(bot.name, db, mode_group="backtest", starting_capital=bt_capital)
-                    if bt_dd["max_dd"] >= max_drawdown_pct:
-                        logger.warning("Bot '%s' backtest drawdown (%.2f%%) exceeds max (%.2f%%), stopping before live", bot.name, bt_dd["max_dd"], max_drawdown_pct)
-                        blb.push(bot.name, "WARN", f"Backtest max drawdown {bt_dd['max_dd']:.2f}% >= {max_drawdown_pct:.2f}%, bot stopped — not allowed to go live")
+                    if bt_max_dd >= max_drawdown_pct:
+                        logger.warning("Bot '%s' backtest drawdown (%.2f%%) exceeds max (%.2f%%), stopping before live", bot.name, bt_max_dd, max_drawdown_pct)
+                        blb.push(bot.name, "WARN", f"Backtest max drawdown {bt_max_dd:.2f}% >= {max_drawdown_pct:.2f}%, bot stopped — not allowed to go live")
                         bot.is_active = False
                         db.commit()
                         return
@@ -688,13 +926,14 @@ class BotManager:
                 # ── Batch pre-load: positions, orders counts (1 query each instead of N) ──
                 matching_bot_names = [b.name for b in matching_bots if b.name not in self._deleted_bots and b.name not in self._backfilling_bots]
 
-                # Pre-load ALL open positions for all matching bots in one query
+                # Pre-load ALL open positions for all matching bots in one query.
+                # Not filtered on symbol: global max_positions scope must count
+                # open positions across every whitelist pair.
                 _all_open_positions = db.query(Position).options(
                     selectinload(Position.orders)
                 ).filter(
                     Position.bot_name.in_(matching_bot_names),
-                    Position.status == "open",
-                    Position.symbol == symbol
+                    Position.status == "open"
                 ).all() if matching_bot_names else []
 
                 _positions_by_bot_mode = defaultdict(list)
@@ -710,17 +949,37 @@ class BotManager:
                 _cooldown_counts = {}
                 cooldown_bots = [b for b in matching_bots if int(b.settings.get("cooldown_trades", 0)) > 0 and int(b.settings.get("cooldown_candles", 0)) > 0]
                 if cooldown_bots:
+                    # Only executed buys in the bot's own mode count toward cooldown —
+                    # backtest history must not block live entries
+                    _bot_modes = {}
+                    for b in cooldown_bots:
+                        m = "forward_test"
+                        if b.settings.get("api_execution") and b.settings.get("api_key_name"):
+                            kr = key_records.get(b.settings.get("api_key_name"))
+                            if kr:
+                                m = "paper" if kr.is_sandbox else "live"
+                        _bot_modes[b.name] = m
+                    now_utc = datetime.now(timezone.utc)
+                    _bot_windows = {
+                        b.name: now_utc - timedelta(seconds=int(b.settings.get("cooldown_candles", 0)) * tf_seconds)
+                        for b in cooldown_bots
+                    }
                     max_cooldown_candles = max(int(b.settings.get("cooldown_candles", 0)) for b in cooldown_bots)
-                    # Use a rough threshold — individual bot thresholds checked in the loop
-                    min_threshold = datetime.now(timezone.utc) - timedelta(seconds=max_cooldown_candles * tf_seconds)
-                    _cooldown_counts = dict(
-                        db.query(Order.bot_name, func.count(Order.id)).filter(
-                            Order.bot_name.in_([b.name for b in cooldown_bots]),
-                            Order.symbol == symbol,
-                            Order.side == "buy",
-                            Order.timestamp > min_threshold
-                        ).group_by(Order.bot_name).all()
-                    )
+                    min_threshold = _naive_utc(now_utc - timedelta(seconds=max_cooldown_candles * tf_seconds))
+                    _recent_buys = db.query(Order.bot_name, Order.mode, Order.timestamp).filter(
+                        Order.bot_name.in_([b.name for b in cooldown_bots]),
+                        Order.symbol == symbol,
+                        Order.side == "buy",
+                        Order.status == "filled",
+                        Order.timestamp > min_threshold
+                    ).all()
+                    for _bn, _om, _ots in _recent_buys:
+                        if _om != _bot_modes.get(_bn):
+                            continue
+                        if _ots.tzinfo is None:
+                            _ots = _ots.replace(tzinfo=timezone.utc)
+                        if _ots > _bot_windows[_bn]:
+                            _cooldown_counts[_bn] = _cooldown_counts.get(_bn, 0) + 1
 
                 # Collect all signal inserts for a single batch commit
                 _pending_signals = []
@@ -737,10 +996,12 @@ class BotManager:
                         if dd_state["max_dd"] >= max_drawdown_pct:
                             logger.warning("Bot '%s' hit max drawdown (%.2f%% >= %.2f%%), auto-stopping", bot.name, dd_state["max_dd"], max_drawdown_pct)
                             blb.push(bot.name, "WARN", f"Max drawdown hit ({dd_state['max_dd']:.2f}% >= {max_drawdown_pct:.2f}%), auto-stopping")
+                            blb.push(bot.name, "WARN", "Closing all open positions before stopping — a stopped bot no longer manages SL/TP")
+                            self._close_all_open_positions(bot, db, key_records)
                             bot.is_active = False
                             self._drawdown_cache.pop((bot.name, "live"), None)
                             self._drawdown_cache.pop((bot.name, "backtest"), None)
-                            # Committed in the batch commit at end of loop
+                            db.commit()
                             continue
 
                     # Reuse indicator computation across bots with identical indicator configs
@@ -756,9 +1017,10 @@ class BotManager:
 
                     latest_index = len(evaluator.df) - 1
                     latest_row = evaluator.df.iloc[latest_index]
-                    latest_time = latest_row['timestamp']
+                    latest_time = _naive_utc(latest_row['timestamp'])
 
                     current_price = float(latest_row['close'])
+                    current_open = float(latest_row['open'])
                     current_high = float(latest_row['high'])
                     current_low = float(latest_row['low'])
 
@@ -796,11 +1058,11 @@ class BotManager:
                     scope = bot.settings.get("max_positions_scope", "per_pair")
 
                     # Use pre-loaded positions instead of per-bot DB query
-                    bot_positions = _positions_by_bot_mode.get((bot.name, mode), [])
+                    bot_positions = [p for p in _positions_by_bot_mode.get((bot.name, mode), []) if p.symbol == symbol]
                     if scope == "per_pair":
                         open_count = len(bot_positions)
                     else:
-                        # For global scope, count all modes for this bot
+                        # For global scope, count all modes and all symbols for this bot
                         open_count = sum(len(v) for k, v in _positions_by_bot_mode.items() if k[0] == bot.name)
 
                     ccxt_symbol = symbol.replace('-', '/').upper()
@@ -828,6 +1090,15 @@ class BotManager:
                                 buy_fee = 0.0
                                 if mode in ["paper", "live"] and api_key_record:
                                     ccxt_inst = get_ccxt()
+                                    if mode == "live":
+                                        # Size live trades from the real exchange balance,
+                                        # not the configured backtest capital
+                                        live_capital = self._get_live_capital(ccxt_inst, api_key_record, ccxt_symbol, bot.name)
+                                        if live_capital is not None:
+                                            trade_amount = self._calculate_trade_amount(current_price, bot.settings, current_equity=live_capital)
+                                            if trade_amount is None:
+                                                logger.warning("Skipping buy for %s: no free balance to size trade", symbol)
+                                                continue
                                     trade_amount = float(ccxt_inst.amount_to_precision(ccxt_symbol, trade_amount))
                                     if trade_amount <= 0:
                                         logger.warning("Trade amount rounded to zero for %s after precision, skipping", ccxt_symbol)
@@ -843,14 +1114,21 @@ class BotManager:
                                     logger.info("%s BUY response: id=%s status=%s filled=%s avg=%s fee=%s",
                                         mode.upper(), okx_order.get("id"), okx_order.get("status"),
                                         okx_order.get("filled"), okx_order.get("average"), okx_order.get("fee"))
-                                    if okx_order.get("status") != "closed":
-                                        logger.warning("%s BUY not fully filled (status=%s). Recording as canceled.", mode.upper(), okx_order.get("status"))
-                                        db.add(Order(bot_name=bot.name, mode=mode, symbol=symbol, side="buy", order_type="market", price=current_price, amount=trade_amount, timestamp=latest_time, exchange_order_id=okx_order.get("id"), status="canceled"))
+                                    okx_order = self._reconcile_order(ccxt_inst, okx_order, ccxt_symbol)
+                                    filled_qty = float(okx_order.get("filled") or 0)
+                                    if filled_qty <= 0 and okx_order.get("status") != "closed":
+                                        logger.warning("%s BUY unfilled (status=%s). Recording as canceled.", mode.upper(), okx_order.get("status"))
+                                        db.add(Order(exchange=exchange, bot_name=bot.name, mode=mode, symbol=symbol, side="buy", order_type="market", price=current_price, amount=trade_amount, timestamp=latest_time, exchange_order_id=okx_order.get("id"), status="canceled"))
+                                        db.commit()
                                         continue
-                                    actual_price = okx_order.get("average") or current_price
+                                    # Book the position for what actually filled, even
+                                    # when the exchange still reports the order as open
+                                    if filled_qty > 0:
+                                        trade_amount = filled_qty
+                                    actual_price = okx_order.get("average") or okx_order.get("price") or current_price
                                     order_id = okx_order.get("id")
-                                    if okx_order.get("fee"):
-                                        buy_fee = float(okx_order["fee"].get("cost", 0) or 0)
+                                    buy_fee = self._fee_in_quote(okx_order.get("fee"), ccxt_symbol, actual_price)
+                                    self._balance_cache.pop((api_key_record.name, ccxt_symbol.split('/')[-1]), None)
 
                                 # Position created after successful exchange order
                                 open_position = Position(exchange=exchange, bot_name=bot.name, symbol=symbol, mode=mode, status="open", side="long", entry_price=actual_price, amount=trade_amount)
@@ -859,6 +1137,10 @@ class BotManager:
                                 just_opened_ids.add(open_position.id)
 
                                 db.add(Order(position_id=open_position.id, exchange=exchange, bot_name=bot.name, mode=mode, symbol=symbol, side="buy", order_type="market", price=actual_price, amount=trade_amount, timestamp=latest_time, exchange_order_id=order_id, status="filled", fee=buy_fee))
+                                if mode in ["paper", "live"]:
+                                    # A real exchange fill must be persisted immediately —
+                                    # a later rollback may not erase the record of it
+                                    db.commit()
                                 logger.info("%s BUY Filled @ %s", mode.upper(), actual_price)
                                 blb.push(bot.name, "INFO", f"{mode.upper()} BUY {symbol} @ {actual_price}")
 
@@ -866,18 +1148,22 @@ class BotManager:
                                 logger.warning("%s BUY rejected (insufficient funds): %s", mode.upper(), e)
                                 blb.push(bot.name, "WARN", f"{mode.upper()} BUY rejected: insufficient funds")
                                 db.add(Order(exchange=exchange, bot_name=bot.name, mode=mode, symbol=symbol, side="buy", order_type="market", price=current_price, amount=trade_amount, timestamp=latest_time, status="rejected"))
+                                if mode in ["paper", "live"]:
+                                    db.commit()
                             except Exception as e:
                                 logger.error("%s BUY failed: %s", mode.upper(), e, exc_info=True)
                                 blb.push(bot.name, "ERROR", f"{mode.upper()} BUY failed: {e}")
                                 db.add(Order(exchange=exchange, bot_name=bot.name, mode=mode, symbol=symbol, side="buy", order_type="market", price=current_price, amount=trade_amount, timestamp=latest_time, status="canceled"))
+                                if mode in ["paper", "live"]:
+                                    db.commit()
 
                     # Use pre-loaded positions (already includes orders via selectinload)
-                    active_positions = _positions_by_bot_mode.get((bot.name, mode), [])
+                    active_positions = bot_positions
 
                     for pos in active_positions:
                         if pos.id in just_opened_ids: continue
 
-                        exit_events = self._check_exits(pos, current_price, current_high, current_low, is_sell, bot.settings, current_atr)
+                        exit_events = self._check_exits(pos, current_price, current_high, current_low, is_sell, bot.settings, current_atr, row_open=current_open)
 
                         # Track original amount for weighted profit_pct
                         # Use the sum of all buy orders as the original position size
@@ -910,14 +1196,22 @@ class BotManager:
                                     logger.info("%s SELL response: id=%s status=%s filled=%s avg=%s fee=%s",
                                         mode.upper(), okx_order.get("id"), okx_order.get("status"),
                                         okx_order.get("filled"), okx_order.get("average"), okx_order.get("fee"))
-                                    if okx_order.get("status") != "closed":
-                                        logger.warning("%s SELL not fully filled (status=%s). Recording as canceled.", mode.upper(), okx_order.get("status"))
-                                        db.add(Order(position_id=pos.id, bot_name=bot.name, mode=mode, symbol=symbol, side="sell", order_type="market", price=ev['price'], amount=close_qty, timestamp=latest_time, exchange_order_id=okx_order.get("id"), status="canceled"))
+                                    okx_order = self._reconcile_order(ccxt_inst, okx_order, ccxt_symbol)
+                                    filled_qty = float(okx_order.get("filled") or 0)
+                                    if filled_qty <= 0 and okx_order.get("status") != "closed":
+                                        logger.warning("%s SELL unfilled (status=%s). Recording as canceled.", mode.upper(), okx_order.get("status"))
+                                        db.add(Order(position_id=pos.id, exchange=exchange, bot_name=bot.name, mode=mode, symbol=symbol, side="sell", order_type="market", price=ev['price'], amount=close_qty, timestamp=latest_time, exchange_order_id=okx_order.get("id"), status="canceled"))
+                                        db.commit()
                                         continue
-                                    actual_price = okx_order.get("average") or ev['price']
+                                    # Book only what actually sold so a partial fill
+                                    # reduces the position pro rata instead of being
+                                    # retried for the full amount later
+                                    if filled_qty > 0:
+                                        close_qty = min(filled_qty, close_qty)
+                                    actual_price = okx_order.get("average") or okx_order.get("price") or ev['price']
                                     order_id = okx_order.get("id")
-                                    if okx_order.get("fee"):
-                                        actual_fee = float(okx_order["fee"].get("cost", 0) or 0)
+                                    actual_fee = self._fee_in_quote(okx_order.get("fee"), ccxt_symbol, actual_price)
+                                    self._balance_cache.pop((api_key_record.name, ccxt_symbol.split('/')[-1]), None)
 
                                 db.add(Order(position_id=pos.id, exchange=exchange, bot_name=bot.name, mode=mode, symbol=symbol, side="sell", order_type="market", price=actual_price, amount=close_qty, timestamp=latest_time, exchange_order_id=order_id, status="filled", fee=actual_fee))
 
@@ -934,18 +1228,24 @@ class BotManager:
                                     weight = close_qty / pos_original_amount
                                     pos.profit_pct = (pos.profit_pct or 0.0) + (portion_pct * weight)
 
-                                if pos.id in self.position_states:
-                                    self.position_states[pos.id]['triggered_exits'].add(ev['id'])
-                                    pos.triggered_exits = list(self.position_states[pos.id]['triggered_exits'])
+                                with self._position_states_lock:
+                                    if pos.id in self.position_states:
+                                        self.position_states[pos.id]['triggered_exits'].add(ev['id'])
+                                        pos.triggered_exits = list(self.position_states[pos.id]['triggered_exits'])
 
                                 if close_qty >= pos.amount - 0.00001:
                                     pos.status = "closed"
                                     pos.closed_at = latest_time
                                     self._update_drawdown(bot.name, "live", pos.profit_abs)
-                                    if pos.id in self.position_states:
-                                        del self.position_states[pos.id]
+                                    with self._position_states_lock:
+                                        self.position_states.pop(pos.id, None)
                                 else:
                                     pos.amount -= close_qty
+
+                                if mode in ["paper", "live"]:
+                                    # A real exchange fill must be persisted immediately —
+                                    # a later rollback may not erase the record of it
+                                    db.commit()
 
                                 logger.info("%s SELL (%s) Filled @ %s", mode.upper(), ev['reason'], actual_price)
                                 blb.push(bot.name, "INFO", f"{mode.upper()} SELL [{ev['reason']}] {symbol} @ {actual_price}")
@@ -953,6 +1253,8 @@ class BotManager:
                                 logger.error("%s SELL failed: %s", mode.upper(), e, exc_info=True)
                                 blb.push(bot.name, "ERROR", f"{mode.upper()} SELL failed: {e}")
                                 db.add(Order(position_id=pos.id, exchange=exchange, bot_name=bot.name, mode=mode, symbol=symbol, side="sell", order_type="market", price=current_price, amount=close_qty, timestamp=latest_time, status="rejected"))
+                                if mode in ["paper", "live"]:
+                                    db.commit()
 
                     standard_cols = ['id', 'timestamp', 'open', 'high', 'low', 'close', 'volume', 'atr']
                     indicators = { col: float(latest_row[col]) for col in evaluator.df.columns if col not in standard_cols and not pd.isna(latest_row[col]) }
@@ -991,8 +1293,9 @@ class BotManager:
             db = SessionLocal()
             pos_ids = {p.id for p in db.query(Position.id).filter(Position.bot_name == bot_name).all()}
             db.close()
-            for pid in pos_ids:
-                self.position_states.pop(pid, None)
+            with self._position_states_lock:
+                for pid in pos_ids:
+                    self.position_states.pop(pid, None)
         except Exception:
             pass
 

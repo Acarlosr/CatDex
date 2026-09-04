@@ -5,12 +5,32 @@ import numpy as np
 
 logger = logging.getLogger("apexalgo.evaluator")
 
+# Indicator methods the strategy builder exposes. Anything else in a node
+# graph (e.g. a hand-edited import) is rejected instead of reflected onto
+# the pandas_ta accessor.
+ALLOWED_INDICATOR_METHODS = frozenset({
+    # Trend & overlap
+    "sma", "ema", "wma", "dema", "tema", "kama", "linreg", "midpoint",
+    "supertrend", "macd", "adx", "psar", "ichimoku",
+    # Momentum
+    "rsi", "stoch", "stochrsi", "cci", "mfi", "willr", "roc", "mom",
+    "tsi", "uo", "ao", "ppo", "fisher", "cmo",
+    # Volatility
+    "bbands", "atr", "natr", "kc", "donchian", "accbands", "massi",
+    # Volume
+    "volume", "vma", "obv", "vwap", "cmf", "ad", "adosc", "eom", "pvt",
+    # Statistics
+    "variance", "stdev", "zscore", "slope", "entropy", "kurtosis",
+    "skew", "log_return",
+})
+
 class NodeEvaluator:
     def __init__(self, settings: dict):
         self.settings = settings
         self.df = pd.DataFrame()
         self.entry_trigger = settings.get("entry_node")
         self._resolve_cache = {}
+        self._nan_masks = {}
 
     def _calculate_indicators(self):
         """Calculates all indicators on the DataFrame using pandas_ta."""
@@ -21,6 +41,11 @@ class NodeEvaluator:
                 method = str(node.get("method", "rsi")).lower()
                 params = node.get("params", {})
                 out_idx = int(node.get("output_idx", 0))
+
+                if method not in ALLOWED_INDICATOR_METHODS:
+                    logger.warning("Node '%s': indicator method '%s' is not supported, skipping.", node_id, method)
+                    self.df[node_id] = np.nan
+                    continue
 
                 if method == "volume":
                     self.df[node_id] = self.df['volume'] if 'volume' in self.df.columns else np.nan
@@ -43,6 +68,13 @@ class NodeEvaluator:
                         # ichimoku returns a tuple: (span_df, lookahead_df)
                         ich_df = result[0] if isinstance(result, tuple) else result
                         if isinstance(ich_df, pd.DataFrame) and not ich_df.empty:
+                            # Chikou span is the close shifted backwards (a future
+                            # value at each row) — blank it so it can't be used
+                            # as a look-ahead condition input.
+                            ich_df = ich_df.copy()
+                            for col in ich_df.columns:
+                                if str(col).upper().startswith("ICS"):
+                                    ich_df[col] = np.nan
                             if out_idx < len(ich_df.columns):
                                 self.df[node_id] = ich_df.iloc[:, out_idx]
                             else:
@@ -113,17 +145,21 @@ class NodeEvaluator:
 
         node_class = node.get("class")
         result = None
+        nan_mask = None
 
         if node_class == "indicator":
             result = self.df[node_id] if node_id in self.df.columns else pd.Series(np.nan, index=self.df.index)
+            nan_mask = result.isna()
 
         elif node_class == "price_data":
             price_type = node.get("type", "close").lower()
             offset = int(node.get("offset", 0))
             result = self.df[price_type].shift(offset) if price_type in self.df.columns else pd.Series(np.nan, index=self.df.index)
+            nan_mask = result.isna()
 
         elif node_class == "condition":
             left_s = self.resolve_operand(node.get("left"))
+            nan_mask = left_s.isna()
             op = node.get("operator")
 
             if op == "increasing":
@@ -140,6 +176,7 @@ class NodeEvaluator:
                 result = (dec.rolling(window=n, min_periods=n).sum() == n)
             else:
                 right_s = self.resolve_operand(node.get("right"))
+                nan_mask = nan_mask | right_s.isna()
 
                 if op == "cross_above":
                     result = (left_s.shift(1) <= right_s.shift(1)) & (left_s > right_s)
@@ -154,6 +191,9 @@ class NodeEvaluator:
 
             if result is None:
                 result = pd.Series(False, index=self.df.index)
+            else:
+                # Warm-up NaN in either operand means the condition is unknown, not true
+                result = result.fillna(False).astype(bool) & ~nan_mask
 
         elif node_class == "logic":
             # Cast to bool explicitly: a child node may return a numeric series instead of a boolean one
@@ -163,6 +203,13 @@ class NodeEvaluator:
             # Fill NaN with False before boolean conversion to avoid propagating NaN as True
             left_s = left_resolved.fillna(False).astype(bool) if isinstance(left_resolved, pd.Series) else pd.Series(bool(left_resolved), index=self.df.index)
             right_s = right_resolved.fillna(False).astype(bool) if isinstance(right_resolved, pd.Series) else pd.Series(bool(right_resolved), index=self.df.index)
+
+            # Propagate the NaN mask from child nodes so inverting gates
+            # (not/nand/nor) can't turn warm-up NaN into a True signal
+            false_mask = pd.Series(False, index=self.df.index)
+            left_mask = self._nan_masks.get(node.get("left"), false_mask)
+            right_mask = self._nan_masks.get(node.get("right"), false_mask) if node.get("right") else false_mask
+            nan_mask = left_mask | right_mask
 
             op = node.get("operator", "and").lower()
 
@@ -174,9 +221,13 @@ class NodeEvaluator:
             elif op == "not": result = ~left_s
             else: result = pd.Series(False, index=self.df.index)
 
+            result = result & ~nan_mask
+
         if result is None:
             result = pd.Series(np.nan, index=self.df.index)
 
+        if nan_mask is not None:
+            self._nan_masks[node_id] = nan_mask
         self._resolve_cache[node_id] = result
         return result
 

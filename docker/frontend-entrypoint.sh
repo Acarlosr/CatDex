@@ -12,8 +12,16 @@ echo "[frontend] Backend config ready"
 ln -sf /app/data/.env /app/.env
 ln -sf /app/data/cert /app/.cert
 
-# Build frontend if needed (skip if env hasn't changed since last build)
+# Fill in the CSP connect-src with the backend origin from .env
+API_ORIGIN=$(grep '^VITE_API_BASE_URL=' /app/data/.env | cut -d= -f2- | sed 's|/*$||')
+[ -z "$API_ORIGIN" ] && API_ORIGIN="https://localhost:8000"
+sed -i "s|__API_ORIGIN__|${API_ORIGIN}|g" /etc/nginx/conf.d/default.conf
+echo "[frontend] CSP connect-src allows ${API_ORIGIN}"
+
+# Build frontend if needed (skip if env and source haven't changed since last build)
+SRC_HASH=$(find /app/frontend/src -type f -exec md5sum {} + | sort | md5sum | cut -d' ' -f1)
 ENV_HASH=$(md5sum /app/data/.env | cut -d' ' -f1)
+ENV_HASH="${ENV_HASH}-${SRC_HASH}"
 NEEDS_BUILD=false
 [ ! -f /app/frontend/dist/index.html ] && NEEDS_BUILD=true
 [ ! -f /app/data/.frontend-env-hash ] && NEEDS_BUILD=true

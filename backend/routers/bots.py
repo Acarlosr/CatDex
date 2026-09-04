@@ -1,5 +1,6 @@
 import logging
 import json
+import re
 import asyncio
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Body, Query
 from fastapi.responses import Response
@@ -174,7 +175,12 @@ def import_bot(payload: dict = Body(...), db: Session = Depends(get_db)):
 
     name = bot_data.get("name", "Imported Bot")
     if db.query(BotConfig).filter(BotConfig.name == name).first():
-        name = f"{name} (imported)"
+        base = f"{name} (imported)"
+        name = base
+        suffix = 2
+        while db.query(BotConfig).filter(BotConfig.name == name).first():
+            name = f"{base} {suffix}"
+            suffix += 1
 
     bot_settings = bot_data.get("settings", {})
     resolved_exchange = _resolve_exchange(bot_settings, db)
@@ -203,10 +209,13 @@ def import_bot(payload: dict = Body(...), db: Session = Depends(get_db)):
     return result
 
 @router.put("/{bot_id}")
-async def update_bot(bot_id: int, bot_data: dict = Body(...), db: Session = Depends(get_db)):
+def update_bot(bot_id: int, background_tasks: BackgroundTasks, bot_data: dict = Body(...), db: Session = Depends(get_db)):
     bot = db.query(BotConfig).filter(BotConfig.id == bot_id).first()
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
+
+    if bot.is_active:
+        raise HTTPException(status_code=409, detail="Cannot update a running bot. Stop it first, then save your changes.")
 
     if "name" in bot_data and bot_data["name"] != bot.name:
         new_name = bot_data["name"]
@@ -238,9 +247,8 @@ async def update_bot(bot_id: int, bot_data: dict = Body(...), db: Session = Depe
         bot.settings = current_settings
         flag_modified(bot, "settings")
 
-        # Flush stale signals and backtest data in the background
-        bot_name = bot.name
-        asyncio.create_task(flush_bot_data(bot_name))
+        # Flush stale signals and backtest data after the response is sent
+        background_tasks.add_task(flush_bot_data, bot.name)
 
     db.commit()
     result = {"message": "Bot configuration updated successfully"}
@@ -365,7 +373,8 @@ def export_bot(bot_id: int, db: Session = Depends(get_db)):
             "settings": bot.settings or {}
         }
     }
-    filename = bot.name.replace(' ', '_') + ".apex.json"
+    safe_name = re.sub(r'[^A-Za-z0-9_-]', '_', bot.name).strip('_') or f"bot_{bot.id}"
+    filename = f"{safe_name}.apex.json"
     return Response(
         content=json.dumps(payload, indent=2),
         media_type="application/json",

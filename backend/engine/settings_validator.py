@@ -1,8 +1,7 @@
 import logging
-import pandas as pd
-import pandas_ta_classic  # noqa: F401 — registers .ta accessor on DataFrame
 
 from backend.core.exchange_registry import get_exchange_timeframes
+from backend.engine.evaluator import ALLOWED_INDICATOR_METHODS
 
 logger = logging.getLogger("apexalgo.settings_validator")
 VALID_EXIT_TYPES = {'percentage', 'trailing', 'atr', 'fixed'}
@@ -68,9 +67,8 @@ def validate_bot_settings(settings: dict, exchange_id: str | None = None) -> dic
 
         if node_class == "indicator":
             method = str(node.get("method", "")).lower()
-            if method and method not in ('volume', 'vma'):
-                if not hasattr(pd.DataFrame().ta, method):
-                    errors.append(f"Node '{node_id}': indicator method '{method}' not found in pandas_ta.")
+            if method and method not in ALLOWED_INDICATOR_METHODS:
+                errors.append(f"Node '{node_id}': indicator method '{method}' is not supported.")
 
         elif node_class == "price_data":
             price_type = node.get("type", "close")

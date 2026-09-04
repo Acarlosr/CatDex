@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -34,8 +35,11 @@ class CandlePoller:
         self.running = False
         self.needs_reconnect = False
         self._poll_tasks: list[asyncio.Task] = []
-        self._exchange_cache: dict[str, tuple[float, object]] = {}  # exchange_id → (created_at, ccxt instance)
+        self._exchange_cache: dict[str, tuple[float, object, threading.Lock]] = {}  # exchange_id → (created_at, ccxt instance, lock)
         self._exchange_cache_ttl = 3600  # rebuild exchange instances after 1 hour
+        # Last closed candle ts per (exchange, symbol, timeframe), kept across
+        # reconnects so a restarted poll task does not re-publish the same candle.
+        self._last_closed_ts: dict[tuple, int] = {}
 
     # ─────────────────────────────────────────────────────────────────────────
     # Public interface
@@ -244,6 +248,10 @@ class CandlePoller:
 
                 new_candles = []
                 for c in batch:
+                    # The final candle of a batch may still be forming; only fully
+                    # closed candles may be stored, the live poller picks up the rest.
+                    if int(c[0]) + tf_ms > now_ms:
+                        continue
                     dt = datetime.fromtimestamp(int(c[0]) / 1000.0, tz=timezone.utc)
                     if dt not in existing_times:
                         try:
@@ -317,11 +325,15 @@ class CandlePoller:
         most recently CLOSED candle. When its timestamp advances, we have a new
         closed candle.
         """
-        exchange = self._get_public_exchange(exchange_name)
+        exchange, ex_lock = self._get_public_exchange(exchange_name)
 
         # Validate timeframe
+        def _load_markets():
+            with ex_lock:
+                exchange.load_markets()
+
         try:
-            await asyncio.to_thread(exchange.load_markets)
+            await asyncio.to_thread(_load_markets)
         except Exception:
             pass
         if exchange.timeframes and timeframe not in exchange.timeframes:
@@ -333,24 +345,31 @@ class CandlePoller:
             tf_seconds = 60
 
         poll_interval = max(10, min(60, tf_seconds // 4))
-        last_closed_ts: int | None = None
+        sub_key = (exchange_name, symbol, timeframe)
+        last_closed_ts: int | None = self._last_closed_ts.get(sub_key)
 
         logger.info(
             "Poll active: %s/%s/%s every %ds.",
             exchange_name, symbol, timeframe, poll_interval,
         )
 
+        def _fetch():
+            # Re-resolve from the cache every call so the TTL rebuild takes effect,
+            # and hold the per-exchange lock: sync CCXT instances are not thread-safe.
+            inst, lock = self._get_public_exchange(exchange_name)
+            with lock:
+                return inst.fetch_ohlcv(symbol, timeframe, None, 2)
+
         while self.running and not self.needs_reconnect:
             try:
-                candles = await asyncio.to_thread(
-                    exchange.fetch_ohlcv, symbol, timeframe, None, 2
-                )
+                candles = await asyncio.to_thread(_fetch)
                 if len(candles) >= 2:
                     closed = candles[-2]  # penultimate = most recently closed candle
                     closed_ts = int(closed[0])
                     if last_closed_ts != closed_ts:
                         await self._save_and_notify(exchange_name, symbol, timeframe, closed)
                         last_closed_ts = closed_ts
+                        self._last_closed_ts[sub_key] = closed_ts
             except asyncio.CancelledError:
                 break
             except Exception as exc:
@@ -442,14 +461,18 @@ class CandlePoller:
     # ─────────────────────────────────────────────────────────────────────────
 
     def _get_public_exchange(self, exchange_name: str):
-        """Return a cached unauthenticated exchange instance for public market data."""
+        """Return (instance, lock) for a cached unauthenticated exchange used for
+        public market data. Callers must hold the lock around every fetch since
+        sync CCXT instances are not thread-safe."""
         now = time.monotonic()
         cached = self._exchange_cache.get(exchange_name)
         if cached and (now - cached[0]) < self._exchange_cache_ttl:
-            return cached[1]
+            return cached[1], cached[2]
         instance = build_exchange(exchange_name)
-        self._exchange_cache[exchange_name] = (now, instance)
-        return instance
+        # Keep the existing lock across rebuilds so in-flight fetches stay serialized
+        lock = cached[2] if cached else threading.Lock()
+        self._exchange_cache[exchange_name] = (now, instance, lock)
+        return instance, lock
 
 
 candle_poller = CandlePoller()

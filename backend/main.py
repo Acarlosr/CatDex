@@ -49,13 +49,26 @@ async def lifespan(app: FastAPI):
     await bot_task
 
 # Initialize FastAPI application with the lifespan manager
+enable_docs = os.getenv("ENABLE_DOCS", "0") == "1"
 app = FastAPI(
     title="ApexAlgo Engine API",
     version="0.1.0",
     swagger_ui_init_oauth={"clientId": "test"},
-    lifespan=lifespan
+    lifespan=lifespan,
+    docs_url="/docs" if enable_docs else None,
+    redoc_url="/redoc" if enable_docs else None,
+    openapi_url="/openapi.json" if enable_docs else None,
 )
-cors_origins = os.getenv("CORS_ORIGINS", "*").split(",")
+
+DEFAULT_CORS_ORIGINS = (
+    "https://localhost:5173,https://127.0.0.1:5173,"
+    "http://localhost:5173,http://127.0.0.1:5173"
+)
+cors_origins = [
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", DEFAULT_CORS_ORIGINS).split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,

@@ -279,7 +279,9 @@ This is pre-filled with your detected LAN IP (manual) or `localhost` (Docker). C
 | `DATABASE_URL` | SQLAlchemy database connection string | Yes |
 | `ENCRYPTION_KEY` | Fernet key used to encrypt exchange API credentials at rest | Yes |
 | `VITE_API_BASE_URL` | Backend base URL used by the frontend | Yes — verify if needed |
-| `VITE_API_KEY` | API key sent by the frontend on every request | Yes |
+| `CORS_ORIGINS` | Comma-separated list of allowed browser origins | Yes |
+
+The frontend no longer embeds the API key in its bundle. On first visit, enter the `MASTER_API_KEY` from `data/.env` in the login screen; it is stored in your browser's localStorage.
 
 ---
 

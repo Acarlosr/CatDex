@@ -341,23 +341,34 @@ echo ""
 echo "Environment"
 
 if [ -f "$DATA_DIR/.env" ]; then
-    echo "  [ok] .env already exists — leaving untouched"
+    chmod 600 "$DATA_DIR/.env"
+    echo "  [ok] .env already exists — leaving untouched (permissions set to 600)"
 else
     GENERATED_API_KEY=$("$PYTHON_BIN" -c "import secrets; print(secrets.token_urlsafe(32))")
     GENERATED_ENC_KEY=$("$VENV_DIR/bin/python" -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
     PRIMARY_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
     API_BASE_URL="https://${PRIMARY_IP:-localhost}:8000"
 
-    cat > "$DATA_DIR/.env" <<EOF
+    CORS_LIST="https://localhost:5173,https://127.0.0.1:5173"
+    if [ -n "${PRIMARY_IP:-}" ]; then
+        CORS_LIST="${CORS_LIST},https://${PRIMARY_IP}:5173"
+    fi
+
+    (
+        umask 177
+        cat > "$DATA_DIR/.env" <<EOF
 MASTER_API_KEY=${GENERATED_API_KEY}
 DATABASE_URL=sqlite:///./data/ApexAlgoDB.sqlite3
 ENCRYPTION_KEY=${GENERATED_ENC_KEY}
 VITE_API_BASE_URL=${API_BASE_URL}
-VITE_API_KEY=${GENERATED_API_KEY}
+CORS_ORIGINS=${CORS_LIST}
 EOF
-    echo "  [ok] .env created with auto-generated keys"
+    )
+    chmod 600 "$DATA_DIR/.env"
+    echo "  [ok] .env created with auto-generated keys (permissions 600)"
     echo "  NOTE: VITE_API_BASE_URL set to ${API_BASE_URL}"
     echo "        Update this in .env if accessing from a different host."
+    echo "  NOTE: Enter the MASTER_API_KEY from data/.env in the web UI to log in."
 fi
 
 # Symlinks so app code finds .env and .cert at project root (matches Docker layout)

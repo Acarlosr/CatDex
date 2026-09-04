@@ -1,6 +1,6 @@
 import logging
 import time
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -136,8 +136,9 @@ def delete_exchange_keys(key_name: str, db: Session = Depends(get_db)):
     return {"message": f"Key '{key_name}' deleted successfully."}
 
 @router.post("/{name}/swap")
-async def execute_quick_swap(name: str, request: Request, db: Session = Depends(get_db)):
-    payload = await request.json()
+def execute_quick_swap(name: str, payload: dict = Body(...), db: Session = Depends(get_db)):
+    # Sync endpoint: FastAPI runs it in the threadpool, so the blocking
+    # ccxt calls and sleep below don't stall the event loop.
     try:
         key_record = db.query(ExchangeKey).filter(ExchangeKey.name == name).first()
         if not key_record:
