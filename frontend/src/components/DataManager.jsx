@@ -2,10 +2,81 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { apiClient } from '../api/client';
 import PageShell from './ui/PageShell';
 import GlowPanel from './ui/GlowPanel';
+import SectionHeader from './ui/SectionHeader';
 import Modal from './ui/Modal';
+import Button from './ui/Button';
+import Badge from './ui/Badge';
+import StatCard from './ui/StatCard';
+import DataTable from './ui/DataTable';
+import EmptyState from './ui/EmptyState';
+import { Input, Select } from './ui/Input';
+import { Skeleton } from './ui/Skeleton';
+import { toast } from './ui/Toast';
+import { confirmDialog } from './ui/ConfirmDialog';
 
-export default function DataManager({ openChart, setError }) {
+const EXCHANGES = [
+  { id: 'okx', name: 'OKX' },
+  { id: 'binance', name: 'Binance' },
+  { id: 'bitvavo', name: 'Bitvavo' },
+  { id: 'coinbase', name: 'Coinbase' },
+  { id: 'cryptocom', name: 'Crypto.com' },
+  { id: 'kraken', name: 'Kraken' },
+  { id: 'kucoin', name: 'KuCoin' },
+];
+
+/* ── Inline icons (stroke 1.8) ── */
+const IconSync = (
+  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8} aria-hidden="true">
+    <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h5M20 20v-5h-5M5.5 9a7.5 7.5 0 0113-2.2M18.5 15a7.5 7.5 0 01-13 2.2" />
+  </svg>
+);
+const IconChart = (
+  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8} aria-hidden="true">
+    <path strokeLinecap="round" strokeLinejoin="round" d="M4 20V4m0 16h16M8 16v-5m4 5V8m4 8v-3" />
+  </svg>
+);
+const IconTrash = (
+  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8} aria-hidden="true">
+    <path strokeLinecap="round" strokeLinejoin="round" d="M4 7h16M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2m3 0l-.8 12.1A2 2 0 0115.2 21H8.8a2 2 0 01-2-1.9L6 7m4 4v6m4-6v6" />
+  </svg>
+);
+const IconDatabase = (
+  <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5} aria-hidden="true">
+    <ellipse cx="12" cy="5.5" rx="8" ry="2.8" />
+    <path strokeLinecap="round" d="M4 5.5v13c0 1.55 3.58 2.8 8 2.8s8-1.25 8-2.8v-13M4 12c0 1.55 3.58 2.8 8 2.8s8-1.25 8-2.8" />
+  </svg>
+);
+
+const Spinner = (
+  <svg className="spin w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeOpacity="0.25" strokeWidth="3" />
+    <path d="M22 12a10 10 0 0 0-10-10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+  </svg>
+);
+
+function RowAction({ title, onClick, disabled, tone, children }) {
+  const tones = {
+    warn:   'text-warn hover:bg-warn/10',
+    info:   'text-info hover:bg-info/10',
+    danger: 'text-danger hover:bg-danger/10',
+  };
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      onClick={onClick}
+      disabled={disabled}
+      className={`p-1.5 rounded-md transition-colors duration-150 disabled:opacity-40 disabled:pointer-events-none ${tones[tone] || tones.info}`}
+    >
+      {children}
+    </button>
+  );
+}
+
+export default function DataManager({ openChart }) {
   const [summary, setSummary] = useState([]);
+  const [initialLoading, setInitialLoading] = useState(true);
   const [loading, setLoading] = useState(false);
   const [syncingSymbol, setSyncingSymbol] = useState(null);
 
@@ -16,17 +87,6 @@ export default function DataManager({ openChart, setError }) {
   const [endDate, setEndDate] = useState(new Date().toISOString().slice(0, 16));
   const [exchangeTimeframes, setExchangeTimeframes] = useState(null);
 
-  const EXCHANGES = [
-    { id: 'okx', name: 'OKX' },
-    { id: 'binance', name: 'Binance' },
-    { id: 'bitvavo', name: 'Bitvavo' },
-    { id: 'coinbase', name: 'Coinbase' },
-    { id: 'cryptocom', name: 'Crypto.com' },
-    { id: 'kraken', name: 'Kraken' },
-    { id: 'kucoin', name: 'KuCoin' },
-  ];
-
-  const [modalConfig, setModalConfig] = useState(null);
   const [pruneModalConfig, setPruneModalConfig] = useState(null);
   const [pruneDate, setPruneDate] = useState('');
 
@@ -40,9 +100,10 @@ export default function DataManager({ openChart, setError }) {
       const response = await apiClient.get('/api/data/summary');
       setSummary(response.data);
     } catch (err) {
-      if (setError) setError(err.message);
+      toast.error(err.message || 'Failed to load data summary.');
     }
-  }, [setError]);
+    setInitialLoading(false);
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -73,7 +134,6 @@ export default function DataManager({ openChart, setError }) {
   const handleDownload = async (e) => {
     e.preventDefault();
     setLoading(true);
-    if (setError) setError(null);
     try {
       const payload = {
         exchange: exchange,
@@ -83,25 +143,18 @@ export default function DataManager({ openChart, setError }) {
       };
 
       const response = await apiClient.post(`/api/data/fetch/${symbol.toUpperCase()}`, payload);
-      setModalConfig({
-        type: 'success',
-        title: 'Download Complete',
-        message: response.data.new_saved != null
-          ? `${response.data.message} ${response.data.new_saved} new candles added.`
-          : response.data.message,
-        confirmText: 'OK',
-        onConfirm: () => setModalConfig(null)
-      });
+      toast.success(response.data.new_saved != null
+        ? `${response.data.message} ${response.data.new_saved} new candles added.`
+        : response.data.message);
       fetchSummary();
     } catch (err) {
-      if (setError) setError(err.response?.data?.detail || err.response?.data?.error || err.message);
+      toast.error(err.response?.data?.detail || err.response?.data?.error || err.message);
     }
     setLoading(false);
   };
 
   const handleSync = async (row) => {
     setSyncingSymbol(`${row.symbol}_${row.timeframe}`);
-    if (setError) setError(null);
     try {
       const payload = {
         exchange: row.exchange || 'okx',
@@ -112,16 +165,10 @@ export default function DataManager({ openChart, setError }) {
 
       const safeSymbol = row.symbol.replace('/', '-');
       const response = await apiClient.post(`/api/data/fetch/${safeSymbol}`, payload);
-      setModalConfig({
-        type: 'success',
-        title: 'Sync Complete',
-        message: `${row.symbol} synced. ${response.data.new_saved} new candles fetched.`,
-        confirmText: 'OK',
-        onConfirm: () => setModalConfig(null)
-      });
+      toast.success(`${row.symbol} synced. ${response.data.new_saved} new candles fetched.`);
       fetchSummary();
     } catch (err) {
-      if (setError) setError(err.response?.data?.detail || err.response?.data?.error || err.message);
+      toast.error(err.response?.data?.detail || err.response?.data?.error || err.message);
     }
     setSyncingSymbol(null);
   };
@@ -137,16 +184,10 @@ export default function DataManager({ openChart, setError }) {
 
       const res = await apiClient.delete(endpoint);
       setPruneModalConfig(null);
-      setModalConfig({
-        type: 'success',
-        title: 'Data Pruned',
-        message: res.data.message,
-        confirmText: 'OK',
-        onConfirm: () => setModalConfig(null)
-      });
+      toast.success(res.data.message);
       fetchSummary();
     } catch (err) {
-      if (setError) setError(err.response?.data?.detail || err.message);
+      toast.error(err.response?.data?.detail || err.message);
       setPruneModalConfig(null);
     }
     setLoading(false);
@@ -159,6 +200,8 @@ export default function DataManager({ openChart, setError }) {
 
   const uniqueSymbols = useMemo(() => [...new Set(summary.map(r => r.symbol))], [summary]);
   const uniqueTimeframes = useMemo(() => [...new Set(summary.map(r => r.timeframe))], [summary]);
+  const uniqueExchanges = useMemo(() => [...new Set(summary.map(r => r.exchange || 'okx'))], [summary]);
+  const totalCandles = useMemo(() => summary.reduce((acc, r) => acc + (r.count || 0), 0), [summary]);
 
   const filteredData = useMemo(() => {
       return summary.filter(row => {
@@ -173,36 +216,92 @@ export default function DataManager({ openChart, setError }) {
 
   const bulkDeleteFiltered = async () => {
       if (filteredData.length === 0) return;
-      setModalConfig({
-        type: 'danger',
+      const ok = await confirmDialog({
         title: 'Bulk Wipe Data',
-        message: `WARNING: You are about to permanently delete all data for ${filteredData.length} active filters. Proceed?`,
-        confirmText: 'WIPE ALL FILTERED',
-        onConfirm: async () => {
-            setLoading(true);
-            try {
-                await Promise.all(filteredData.map(row =>
-                    apiClient.delete(`/api/data?symbol=${encodeURIComponent(row.symbol)}&timeframe=${row.timeframe}`)
-                ));
-                fetchSummary();
-                setModalConfig({ type: 'success', title: 'Database Wiped', message: `Successfully deleted all data matching your filters.`, confirmText: 'OK', onConfirm: () => setModalConfig(null) });
-            } catch {
-                setModalConfig({ type: 'danger', title: 'Error', message: 'Failed to delete some data.', confirmText: 'OK', onConfirm: () => setModalConfig(null) });
-            }
-            setLoading(false);
-        },
-        onCancel: () => setModalConfig(null)
+        message: `You are about to permanently delete all candle history for ${filteredData.length} dataset${filteredData.length === 1 ? '' : 's'} matching your filters. This cannot be undone.`,
+        confirmText: 'Wipe All Filtered',
+        type: 'danger',
       });
+      if (!ok) return;
+      setLoading(true);
+      try {
+          await Promise.all(filteredData.map(row =>
+              apiClient.delete(`/api/data?symbol=${encodeURIComponent(row.symbol)}&timeframe=${row.timeframe}`)
+          ));
+          fetchSummary();
+          toast.success('Successfully deleted all data matching your filters.');
+      } catch {
+          toast.error('Failed to delete some data.');
+      }
+      setLoading(false);
   };
 
-  const inputClass = "w-full bg-[#080a0f] border border-[#202532] text-[#eaecef] px-3 py-2 text-xs font-bold focus:outline-none focus:border-[#0ea5e9] focus:shadow-[0_0_8px_rgba(14,165,233,0.1)] transition-all duration-200 rounded-lg";
-  const selectClass = "bg-[#080a0f] border border-[#202532] text-[#eaecef] text-[10px] uppercase font-bold rounded-lg px-2.5 py-1.5 outline-none cursor-pointer transition-all duration-200 hover:border-[#848e9c]";
+  const columns = [
+    {
+      key: 'exchange', label: 'Exchange',
+      render: (v) => <span className="text-accent font-bold uppercase text-[10px]">{v || 'okx'}</span>,
+    },
+    {
+      key: 'symbol', label: 'Symbol',
+      render: (v) => <span className="text-text font-bold">{v}</span>,
+    },
+    {
+      key: 'timeframe', label: 'Interval',
+      render: (v) => <Badge variant="info">{v}</Badge>,
+    },
+    {
+      key: 'count', label: 'Data Points', align: 'right',
+      render: (v) => <span className="text-text-secondary">{(v ?? 0).toLocaleString()}</span>,
+    },
+    {
+      key: 'oldest_candle', label: 'Oldest Record',
+      render: (v) => <span className="text-muted text-[10px]">{new Date(v).toLocaleString()}</span>,
+    },
+    {
+      key: 'newest_candle', label: 'Newest Record',
+      render: (v) => <span className="text-text text-[10px] font-bold">{new Date(v).toLocaleString()}</span>,
+    },
+    {
+      key: 'actions', label: 'Actions', align: 'right',
+      render: (_, row) => {
+        const isSyncing = syncingSymbol === `${row.symbol}_${row.timeframe}`;
+        return (
+          <span className="inline-flex items-center gap-0.5">
+            <RowAction
+              title="Sync missing candles up to right now"
+              tone="warn"
+              disabled={isSyncing || loading}
+              onClick={() => handleSync(row)}
+            >
+              {isSyncing ? Spinner : IconSync}
+            </RowAction>
+            <RowAction
+              title="Open in chart"
+              tone="info"
+              disabled={isSyncing || loading}
+              onClick={() => openChart(row)}
+            >
+              {IconChart}
+            </RowAction>
+            <RowAction
+              title="Delete or prune this dataset"
+              tone="danger"
+              disabled={isSyncing || loading}
+              onClick={() => handleDeleteClick(row)}
+            >
+              {IconTrash}
+            </RowAction>
+          </span>
+        );
+      },
+    },
+  ];
+
+  const filterSelectClass = '!py-1.5 !text-[11px] !font-bold uppercase';
 
   return (
     <PageShell glowColor="gold">
-      <Modal config={modalConfig ? { ...modalConfig, busy: loading } : null} />
-
-      {/* Prune modal — custom body */}
+      {/* Prune modal — custom body (date input, so richer than confirmDialog) */}
       {pruneModalConfig && (
         <Modal
           config={{
@@ -212,172 +311,221 @@ export default function DataManager({ openChart, setError }) {
           }}
           customBody={
             <div className="space-y-4">
-              <p className="text-[11px] text-[#eaecef] leading-relaxed">
-                Manage local data for <strong className="text-[#fcd535]">{pruneModalConfig.symbol} ({pruneModalConfig.timeframe})</strong>. Select a date to delete all history before that date, or click Delete All to wipe the entire pair.
+              <p className="text-[11px] text-text-secondary leading-relaxed">
+                Manage local data for{' '}
+                <strong className="text-accent font-num">{pruneModalConfig.symbol} ({pruneModalConfig.timeframe})</strong>.
+                Select a date to delete all history before that date, or click Delete All to wipe the entire pair.
               </p>
-              <div>
-                <label className="block text-[9px] text-[#848e9c] mb-1.5 uppercase font-bold tracking-wider">Prune Before Date (Optional)</label>
-                <input
-                  type="date"
-                  value={pruneDate}
-                  onChange={e => setPruneDate(e.target.value)}
-                  className="w-full bg-[#080a0f] border border-[#202532] text-[#eaecef] px-3 py-2 text-sm focus:outline-none focus:border-[#f6465d] rounded-lg color-scheme-dark transition-all duration-200"
-                />
-              </div>
-              <div className="flex justify-end space-x-3 pt-2">
-                <button
+              <Input
+                type="date"
+                label="Prune Before Date (Optional)"
+                value={pruneDate}
+                onChange={e => setPruneDate(e.target.value)}
+                className="color-scheme-dark"
+              />
+              <div className="flex justify-end gap-3 pt-2">
+                <Button
+                  variant="danger"
+                  size="sm"
+                  loading={loading}
                   onClick={() => executeDelete(pruneModalConfig.symbol, pruneModalConfig.timeframe, '')}
-                  disabled={loading}
-                  className="px-4 py-2 rounded-lg text-[10px] font-bold uppercase transition-all duration-200 border border-[#f6465d]/50 text-[#f6465d] hover:bg-[#f6465d]/10 disabled:opacity-50"
                 >
-                  {loading ? 'Deleting...' : 'Delete All'}
-                </button>
-                <button
+                  Delete All
+                </Button>
+                <Button
+                  variant="danger"
+                  size="sm"
+                  loading={loading}
+                  disabled={!pruneDate}
+                  className="!bg-danger !text-white hover:!bg-danger/80"
                   onClick={() => executeDelete(pruneModalConfig.symbol, pruneModalConfig.timeframe, pruneDate)}
-                  disabled={!pruneDate || loading}
-                  className="px-4 py-2 rounded-lg text-[10px] font-bold uppercase transition-all duration-200 bg-[#f6465d] hover:bg-[#f6465d]/80 text-white disabled:opacity-30 shadow-[0_0_12px_rgba(246,70,93,0.15)]"
                 >
-                  {loading ? 'Deleting...' : 'Prune Date'}
-                </button>
+                  Prune Date
+                </Button>
               </div>
             </div>
           }
         />
       )}
 
-      {/* Download bar */}
+      <SectionHeader
+        title="Market Data"
+        subtitle="Download, sync, and manage historical candle datasets"
+        accentColor="gold"
+      />
+
+      {/* Summary stats */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {initialLoading ? (
+          <>
+            <Skeleton className="h-[86px]" />
+            <Skeleton className="h-[86px]" />
+            <Skeleton className="h-[86px]" />
+            <Skeleton className="h-[86px]" />
+          </>
+        ) : (
+          <>
+            <StatCard label="Datasets" value={summary.length.toLocaleString()} color="gold" sub="pair / interval combos" />
+            <StatCard label="Total Candles" value={totalCandles.toLocaleString()} color="cyan" />
+            <StatCard label="Unique Pairs" value={uniqueSymbols.length.toLocaleString()} color="green" />
+            <StatCard label="Exchanges" value={uniqueExchanges.length.toLocaleString()} color="purple" />
+          </>
+        )}
+      </div>
+
+      {/* Download form */}
       <GlowPanel glowColor="gold">
-        <h3 className="text-[#848e9c] text-[10px] font-bold mb-3 uppercase tracking-wider">Historical Data Engine</h3>
-        <form onSubmit={handleDownload} className="flex flex-wrap gap-4 items-end">
-          <div className="w-32">
-            <label className="block text-[9px] font-bold uppercase text-[#848e9c] mb-1.5">Exchange</label>
-            <select value={exchange} onChange={e => setExchange(e.target.value)} className={inputClass}>
-              {EXCHANGES.map(ex => (
-                <option key={ex.id} value={ex.id}>{ex.name}</option>
-              ))}
-            </select>
+        <form onSubmit={handleDownload} className="space-y-5">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-5">
+            {/* Step 1 — Source */}
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <span className="w-5 h-5 rounded-full bg-accent/10 border border-accent/30 text-accent text-[10px] font-num font-bold flex items-center justify-center">1</span>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-muted">Source</span>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <Select label="Exchange" value={exchange} onChange={e => setExchange(e.target.value)}>
+                  {EXCHANGES.map(ex => (
+                    <option key={ex.id} value={ex.id}>{ex.name}</option>
+                  ))}
+                </Select>
+                <Input
+                  label="Asset Pair"
+                  mono
+                  required
+                  value={symbol}
+                  onChange={e => setSymbol(e.target.value.toUpperCase())}
+                  placeholder="BTC-USDC"
+                />
+              </div>
+            </div>
+
+            {/* Step 2 — Range */}
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <span className="w-5 h-5 rounded-full bg-accent/10 border border-accent/30 text-accent text-[10px] font-num font-bold flex items-center justify-center">2</span>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-muted">Interval & Range</span>
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <Select label="Interval" required value={timeframe} onChange={e => setTimeframe(e.target.value)} className="font-num">
+                  {(exchangeTimeframes || ['1m','5m','15m','1h','4h','1d']).map(tf => (
+                    <option key={tf} value={tf}>{tf}</option>
+                  ))}
+                </Select>
+                <Input
+                  type="datetime-local"
+                  label="Start"
+                  mono
+                  required
+                  value={startDate}
+                  onChange={e => setStartDate(e.target.value)}
+                  className="color-scheme-dark"
+                />
+                <Input
+                  type="datetime-local"
+                  label="End"
+                  mono
+                  required
+                  value={endDate}
+                  onChange={e => setEndDate(e.target.value)}
+                  className="color-scheme-dark"
+                />
+              </div>
+            </div>
           </div>
-          <div className="flex-1 min-w-[120px]">
-            <label className="block text-[9px] font-bold uppercase text-[#848e9c] mb-1.5">Asset Pair</label>
-            <input type="text" required value={symbol} onChange={e => setSymbol(e.target.value.toUpperCase())} className={inputClass} />
+
+          <div className="flex items-center justify-between gap-4 pt-4 border-t border-border">
+            <p className="text-[10px] text-faint">
+              {loading
+                ? 'Fetching candles from the exchange — large ranges can take a while.'
+                : 'Candles are stored locally, deduplicated per exchange, symbol and interval.'}
+            </p>
+            <Button type="submit" loading={loading} disabled={syncingSymbol !== null}>
+              {loading ? 'Fetching…' : 'Download Data'}
+            </Button>
           </div>
-          <div className="w-24 md:w-28">
-            <label className="block text-[9px] font-bold uppercase text-[#848e9c] mb-1.5">Interval</label>
-            <select required value={timeframe} onChange={e => setTimeframe(e.target.value)} className={inputClass}>
-              {(exchangeTimeframes || ['1m','5m','15m','1h','4h','1d']).map(tf => (
-                <option key={tf} value={tf}>{tf}</option>
-              ))}
-            </select>
-          </div>
-          <div className="flex-1 min-w-[150px]">
-            <label className="block text-[9px] font-bold uppercase text-[#848e9c] mb-1.5">Start Date</label>
-            <input type="datetime-local" required value={startDate} onChange={e => setStartDate(e.target.value)} className={`${inputClass} text-[#848e9c] color-scheme-dark`} />
-          </div>
-          <div className="flex-1 min-w-[150px]">
-            <label className="block text-[9px] font-bold uppercase text-[#848e9c] mb-1.5">End Date</label>
-            <input type="datetime-local" required value={endDate} onChange={e => setEndDate(e.target.value)} className={`${inputClass} text-[#848e9c] color-scheme-dark`} />
-          </div>
-          <button type="submit" disabled={loading || syncingSymbol !== null} className="w-full md:w-auto bg-[#fcd535] text-[#181a20] px-6 py-2 text-[10px] font-bold uppercase tracking-wider hover:bg-[#e5c02a] disabled:opacity-50 transition-all duration-200 rounded-lg h-[34px] shadow-[0_0_15px_rgba(252,213,53,0.15)] hover:shadow-[0_0_25px_rgba(252,213,53,0.25)] active:scale-95">
-            {loading ? 'Fetching...' : 'Download Data'}
-          </button>
         </form>
       </GlowPanel>
 
-      {/* Data table */}
-      <div className="terminal-card overflow-hidden flex flex-col h-[600px]">
-        <div className="bg-[#080a0f]/40 px-5 py-3.5 border-b border-[#202532] flex flex-wrap gap-y-3 justify-between items-center shrink-0">
-            <div className="flex items-center space-x-3">
-                <span className="text-[10px] text-[#848e9c] font-bold uppercase tracking-wider hidden md:inline">Filter View:</span>
-                <select value={filterSymbol} onChange={(e) => handleFilterSymbol(e.target.value)} className={selectClass}>
-                    <option value="ALL">All Pairs</option>
-                    {uniqueSymbols.map(sym => <option key={sym} value={sym}>{sym}</option>)}
-                </select>
-                <select value={filterTf} onChange={(e) => handleFilterTimeframe(e.target.value)} className={selectClass}>
-                    <option value="ALL">All Intervals</option>
-                    {uniqueTimeframes.map(tf => <option key={tf} value={tf}>{tf}</option>)}
-                </select>
-
-                {totalPages > 1 && (
-                    <div className="flex space-x-2 items-center bg-[#080a0f] rounded-lg border border-[#202532] overflow-hidden ml-2 md:ml-4">
-                        <button disabled={currentPage === 1} onClick={() => setCurrentPage(p=>p-1)} className="px-2.5 py-1 hover:bg-[#202532] disabled:opacity-30 text-[#848e9c] transition-colors">&#9664;</button>
-                        <span className="text-[9px] font-bold text-[#eaecef] px-2 font-mono">PG {currentPage} / {totalPages}</span>
-                        <button disabled={currentPage === totalPages} onClick={() => setCurrentPage(p=>p+1)} className="px-2.5 py-1 hover:bg-[#202532] disabled:opacity-30 text-[#848e9c] transition-colors">&#9654;</button>
-                    </div>
-                )}
+      {/* Data overview */}
+      <div className="space-y-3">
+        <div className="flex flex-wrap gap-y-3 justify-between items-center">
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="text-[10px] text-muted font-bold uppercase tracking-wider hidden md:inline">Filter</span>
+            <div className="w-36">
+              <Select value={filterSymbol} onChange={(e) => handleFilterSymbol(e.target.value)} className={filterSelectClass}>
+                <option value="ALL">All Pairs</option>
+                {uniqueSymbols.map(sym => <option key={sym} value={sym}>{sym}</option>)}
+              </Select>
+            </div>
+            <div className="w-36">
+              <Select value={filterTf} onChange={(e) => handleFilterTimeframe(e.target.value)} className={filterSelectClass}>
+                <option value="ALL">All Intervals</option>
+                {uniqueTimeframes.map(tf => <option key={tf} value={tf}>{tf}</option>)}
+              </Select>
             </div>
 
-            <button
-                onClick={bulkDeleteFiltered}
-                disabled={filteredData.length === 0 || loading}
-                className="text-[#f6465d] hover:text-white border border-transparent hover:border-[#f6465d]/50 hover:bg-[#f6465d] hover:shadow-[0_0_12px_rgba(246,70,93,0.2)] text-[9px] font-bold uppercase px-3 py-1.5 rounded-lg transition-all duration-200 disabled:opacity-30"
-            >
-                Wipe Filtered History
-            </button>
+            {totalPages > 1 && (
+              <div className="flex items-center bg-inset rounded-md border border-border overflow-hidden">
+                <button
+                  disabled={currentPage === 1}
+                  onClick={() => setCurrentPage(p => p - 1)}
+                  title="Previous page"
+                  className="px-2.5 py-1.5 hover:bg-overlay disabled:opacity-30 text-muted transition-colors"
+                >
+                  &#9664;
+                </button>
+                <span className="text-[9px] font-bold text-text px-2 font-num">PG {currentPage} / {totalPages}</span>
+                <button
+                  disabled={currentPage === totalPages}
+                  onClick={() => setCurrentPage(p => p + 1)}
+                  title="Next page"
+                  className="px-2.5 py-1.5 hover:bg-overlay disabled:opacity-30 text-muted transition-colors"
+                >
+                  &#9654;
+                </button>
+              </div>
+            )}
+          </div>
+
+          <Button
+            variant="danger"
+            size="sm"
+            onClick={bulkDeleteFiltered}
+            disabled={filteredData.length === 0 || loading}
+          >
+            Wipe Filtered History
+          </Button>
         </div>
 
-        <div className="overflow-x-auto overflow-y-auto flex-1 custom-scrollbar">
-            <table className="w-full text-left whitespace-nowrap min-w-[700px] relative">
-              <thead className="bg-[#080a0f]/80 border-b border-[#202532] text-[9px] text-[#848e9c] uppercase tracking-wider sticky top-0 z-10">
-                <tr>
-                  <th className="px-5 py-2.5 font-bold">Exchange</th>
-                  <th className="px-5 py-2.5 font-bold">Symbol</th>
-                  <th className="px-5 py-2.5 font-bold">Interval</th>
-                  <th className="px-5 py-2.5 font-bold">Data Points</th>
-                  <th className="px-5 py-2.5 font-bold">Oldest Record</th>
-                  <th className="px-5 py-2.5 font-bold">Newest Record</th>
-                  <th className="px-5 py-2.5 font-bold text-right">Database Actions</th>
-                </tr>
-              </thead>
-              <tbody className="text-xs">
-                {renderedData.map((row, i) => {
-                  const isSyncing = syncingSymbol === `${row.symbol}_${row.timeframe}`;
-                  return (
-                    <tr key={i} className="border-b border-[#202532]/40 hover:bg-[#fcd535]/[0.02] transition-colors duration-150 group">
-                      <td className="px-5 py-2.5 text-[#fcd535] font-bold uppercase text-[10px]">{row.exchange || 'okx'}</td>
-                      <td className="px-5 py-2.5 text-[#eaecef] font-bold">{row.symbol}</td>
-                      <td className="px-5 py-2.5 text-[#0ea5e9] font-bold">{row.timeframe}</td>
-                      <td className="px-5 py-2.5 font-mono text-[#848e9c] group-hover:text-[#eaecef] transition-colors">{row.count.toLocaleString()}</td>
-                      <td className="px-5 py-2.5 text-[11px] text-[#848e9c]">{new Date(row.oldest_candle).toLocaleString()}</td>
-                      <td className="px-5 py-2.5 text-[11px] text-[#eaecef] font-bold">{new Date(row.newest_candle).toLocaleString()}</td>
-                      <td className="px-5 py-2.5 text-right space-x-3">
-                        <button
-                          onClick={() => handleSync(row)}
-                          disabled={isSyncing || loading}
-                          className="text-[#fcd535] hover:text-[#e5c02a] text-[10px] font-bold uppercase tracking-wider transition-colors disabled:opacity-50"
-                          title="Fetch missing data up to exactly right now"
-                        >
-                          {isSyncing ? 'Syncing...' : 'Sync'}
-                        </button>
-                        <span className="text-[#202532]">|</span>
-                        <button
-                          onClick={() => openChart(row)}
-                          disabled={isSyncing || loading}
-                          className="text-[#0ea5e9] hover:text-[#0ea5e9]/80 text-[10px] font-bold uppercase tracking-wider transition-colors disabled:opacity-50"
-                        >
-                          Chart
-                        </button>
-                        <span className="text-[#202532]">|</span>
-                        <button
-                          onClick={() => handleDeleteClick(row)}
-                          disabled={isSyncing || loading}
-                          className="text-[#f6465d] hover:text-[#f6465d]/80 text-[10px] font-bold uppercase tracking-wider transition-colors disabled:opacity-50"
-                        >
-                          Drop
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-                {filteredData.length === 0 && (
-                  <tr>
-                    <td colSpan="7" className="p-12 text-center text-[#848e9c] text-xs">
-                      No data matches your filters or the database is empty.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-        </div>
+        {initialLoading ? (
+          <div className="terminal-card p-5 space-y-3">
+            <Skeleton className="h-8" />
+            <Skeleton className="h-8" />
+            <Skeleton className="h-8" />
+            <Skeleton className="h-8" />
+          </div>
+        ) : (
+          <DataTable
+            columns={columns}
+            data={renderedData}
+            maxHeight="540px"
+            emptyState={
+              <EmptyState
+                icon={IconDatabase}
+                title={summary.length === 0 ? 'No market data yet' : 'No datasets match your filters'}
+                description={summary.length === 0
+                  ? 'Download historical candles above to start backtesting your strategies.'
+                  : 'Adjust the pair or interval filters to see stored datasets.'}
+                action={summary.length > 0 ? (
+                  <Button size="sm" variant="secondary" onClick={() => { handleFilterSymbol('ALL'); handleFilterTimeframe('ALL'); }}>
+                    Clear Filters
+                  </Button>
+                ) : null}
+              />
+            }
+          />
+        )}
       </div>
     </PageShell>
   );

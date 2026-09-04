@@ -118,25 +118,25 @@ Object.values(INDICATOR_GROUPS).forEach(group => {
 // ==========================================
 
 export const BotConfigNode = ({ id, data }) => (
-  <div className="bg-[#12151c]/90 backdrop-blur-xl border border-[#8b5cf6] rounded-xl shadow-lg min-w-[280px]">
-    <div className="bg-[#8b5cf6]/10 px-3 py-2 border-b border-[#8b5cf6]/30 flex justify-between items-center">
-      <span className="font-bold text-[#8b5cf6] text-[11px] uppercase tracking-wider">MAIN CONFIGURATION</span>
-      {data.onDelete && <button onClick={() => data.onDelete(id)} className="text-[#848e9c] hover:text-[#f6465d] transition-colors">✕</button>}
+  <div className="bg-raised/90 backdrop-blur-xl border border-purple rounded-xl shadow-lg min-w-[280px]">
+    <div className="bg-purple/10 px-3 py-2 border-b border-purple/30 flex justify-between items-center">
+      <span className="font-bold text-purple text-[11px] uppercase tracking-wider">MAIN CONFIGURATION</span>
+      {data.onDelete && <button onClick={() => data.onDelete(id)} className="text-muted hover:text-danger transition-colors">✕</button>}
     </div>
-    <div className="p-4 bg-[#080a0f]/80 rounded-b space-y-4">
+    <div className="p-4 bg-bg/80 rounded-b space-y-4">
       <div>
-        <label className="text-[10px] text-[#848e9c] font-bold uppercase mb-1.5 block">Algorithm Name</label>
+        <label className="text-[10px] text-muted font-bold uppercase mb-1.5 block">Algorithm Name</label>
         <input 
           type="text" 
-          className="w-full bg-[#12151c] border border-[#202532] text-[#eaecef] text-xs rounded p-2 nodrag focus:border-[#8b5cf6] outline-none"
+          className="w-full bg-inset border border-border text-text text-xs rounded-md p-2 nodrag focus:border-purple outline-none"
           value={data.botName !== undefined ? data.botName : "Apex Strategy Alpha"}
           onChange={(e) => data.onChange(id, 'botName', e.target.value)}
         />
       </div>
       <div className="flex space-x-2">
         <div className="w-1/2">
-            <label className="text-[10px] text-[#848e9c] font-bold uppercase mb-1.5 block">Data Interval</label>
-            <select className="w-full bg-[#12151c] border border-[#202532] text-[#eaecef] text-xs rounded p-2 nodrag focus:border-[#8b5cf6] outline-none" value={data.timeframe !== undefined ? data.timeframe : "1m"} onChange={(e) => data.onChange(id, 'timeframe', e.target.value)}>
+            <label className="text-[10px] text-muted font-bold uppercase mb-1.5 block">Data Interval</label>
+            <select className="w-full bg-inset border border-border text-text text-xs rounded-md p-2 nodrag focus:border-purple outline-none" value={data.timeframe !== undefined ? data.timeframe : "1m"} onChange={(e) => data.onChange(id, 'timeframe', e.target.value)}>
                 {(data.supportedTimeframes
                     ? ALL_TIMEFRAMES.filter(tf => data.supportedTimeframes.includes(tf.value))
                     : ALL_TIMEFRAMES
@@ -146,39 +146,39 @@ export const BotConfigNode = ({ id, data }) => (
             </select>
         </div>
         <div className="w-1/2">
-            <label className="text-[10px] text-[#848e9c] font-bold uppercase mb-1.5 block">Max Positions</label>
-            <input type="number" className="w-full bg-[#12151c] border border-[#202532] text-[#fcd535] text-xs rounded p-2 nodrag focus:border-[#8b5cf6] outline-none font-mono text-center" value={data.maxPositions !== undefined ? data.maxPositions : 1} onChange={(e) => data.onChange(id, 'maxPositions', e.target.value === "" ? "" : parseInt(e.target.value))} />
+            <label className="text-[10px] text-muted font-bold uppercase mb-1.5 block">Max Positions</label>
+            <input type="number" className="w-full bg-inset border border-border text-accent text-xs rounded-md p-2 nodrag focus:border-purple outline-none font-num text-center" value={data.maxPositions !== undefined ? data.maxPositions : 1} onChange={(e) => data.onChange(id, 'maxPositions', e.target.value === "" ? "" : parseInt(e.target.value))} />
         </div>
       </div>
-      <div className="pt-2 border-t border-[#202532]">
-        <label className="text-[10px] text-[#848e9c] font-bold uppercase mb-1.5 block">Position Limit Scope</label>
-        <select className="w-full bg-[#12151c] border border-[#202532] text-[#eaecef] text-xs rounded p-2 nodrag focus:border-[#8b5cf6] outline-none" value={data.maxPositionsScope !== undefined ? data.maxPositionsScope : "per_pair"} onChange={(e) => data.onChange(id, 'maxPositionsScope', e.target.value)}>
+      <div className="pt-2 border-t border-border">
+        <label className="text-[10px] text-muted font-bold uppercase mb-1.5 block">Position Limit Scope</label>
+        <select className="w-full bg-inset border border-border text-text text-xs rounded-md p-2 nodrag focus:border-purple outline-none" value={data.maxPositionsScope !== undefined ? data.maxPositionsScope : "per_pair"} onChange={(e) => data.onChange(id, 'maxPositionsScope', e.target.value)}>
           <option value="per_pair">Per Pair (e.g. 1x BTC, 1x ETH)</option>
           <option value="global">Global (Total across wallet)</option>
         </select>
       </div>
 
-      <div className="pt-2 border-t border-[#202532]">
-        <label className="text-[10px] text-[#848e9c] font-bold uppercase mb-1.5 block">Max New Entries per X Candles (0 = Off)</label>
+      <div className="pt-2 border-t border-border">
+        <label className="text-[10px] text-muted font-bold uppercase mb-1.5 block">Max New Entries per X Candles (0 = Off)</label>
         <div className="flex space-x-2 items-center">
-            <input type="number" placeholder="Max Entries" title="Max Entries" className="w-1/2 bg-[#12151c] border border-[#202532] text-[#fcd535] text-xs rounded p-2 nodrag focus:border-[#8b5cf6] outline-none font-mono text-center" value={data.cooldownTrades !== undefined ? data.cooldownTrades : 0} onChange={(e) => data.onChange(id, 'cooldownTrades', e.target.value === "" ? "" : parseInt(e.target.value))} />
-            <span className="text-[9px] text-[#848e9c] font-bold uppercase">PER</span>
-            <input type="number" placeholder="Candles" title="Amount of Candles" className="w-1/2 bg-[#12151c] border border-[#202532] text-[#fcd535] text-xs rounded p-2 nodrag focus:border-[#8b5cf6] outline-none font-mono text-center" value={data.cooldownCandles !== undefined ? data.cooldownCandles : 0} onChange={(e) => data.onChange(id, 'cooldownCandles', e.target.value === "" ? "" : parseInt(e.target.value))} />
+            <input type="number" placeholder="Max Entries" title="Max Entries" className="w-1/2 bg-inset border border-border text-accent text-xs rounded-md p-2 nodrag focus:border-purple outline-none font-num text-center" value={data.cooldownTrades !== undefined ? data.cooldownTrades : 0} onChange={(e) => data.onChange(id, 'cooldownTrades', e.target.value === "" ? "" : parseInt(e.target.value))} />
+            <span className="text-[9px] text-muted font-bold uppercase">PER</span>
+            <input type="number" placeholder="Candles" title="Amount of Candles" className="w-1/2 bg-inset border border-border text-accent text-xs rounded-md p-2 nodrag focus:border-purple outline-none font-num text-center" value={data.cooldownCandles !== undefined ? data.cooldownCandles : 0} onChange={(e) => data.onChange(id, 'cooldownCandles', e.target.value === "" ? "" : parseInt(e.target.value))} />
         </div>
       </div>
-      <div className="pt-2 border-t border-[#202532]">
-        <label className="text-[10px] text-[#848e9c] font-bold uppercase mb-1.5 block">Max Drawdown % (0 = Off)</label>
-        <input type="number" step="0.1" className="w-full bg-[#12151c] border border-[#202532] text-[#fcd535] text-xs rounded p-2 nodrag focus:border-[#8b5cf6] outline-none font-mono text-center" value={data.maxDrawdown !== undefined ? data.maxDrawdown : 0} onChange={(e) => data.onChange(id, 'maxDrawdown', e.target.value === "" ? "" : parseFloat(e.target.value))} />
-        <span className="text-[9px] text-[#848e9c] block mt-1">Auto-stops bot if cumulative drawdown exceeds this %</span>
+      <div className="pt-2 border-t border-border">
+        <label className="text-[10px] text-muted font-bold uppercase mb-1.5 block">Max Drawdown % (0 = Off)</label>
+        <input type="number" step="0.1" className="w-full bg-inset border border-border text-accent text-xs rounded-md p-2 nodrag focus:border-purple outline-none font-num text-center" value={data.maxDrawdown !== undefined ? data.maxDrawdown : 0} onChange={(e) => data.onChange(id, 'maxDrawdown', e.target.value === "" ? "" : parseFloat(e.target.value))} />
+        <span className="text-[9px] text-muted block mt-1">Auto-stops bot if cumulative drawdown exceeds this %</span>
       </div>
-      <div className="pt-2 border-t border-[#202532]">
-        <label className="text-[10px] text-[#848e9c] font-bold uppercase mb-1.5 block">Max Order Value USD (0 = Off)</label>
-        <input type="number" step="1" className="w-full bg-[#12151c] border border-[#202532] text-[#fcd535] text-xs rounded p-2 nodrag focus:border-[#8b5cf6] outline-none font-mono text-center" value={data.maxOrderValue !== undefined ? data.maxOrderValue : 0} onChange={(e) => data.onChange(id, 'maxOrderValue', e.target.value === "" ? "" : parseFloat(e.target.value))} />
-        <span className="text-[9px] text-[#848e9c] block mt-1">Safety guard: rejects live orders exceeding this USD value</span>
+      <div className="pt-2 border-t border-border">
+        <label className="text-[10px] text-muted font-bold uppercase mb-1.5 block">Max Order Value USD (0 = Off)</label>
+        <input type="number" step="1" className="w-full bg-inset border border-border text-accent text-xs rounded-md p-2 nodrag focus:border-purple outline-none font-num text-center" value={data.maxOrderValue !== undefined ? data.maxOrderValue : 0} onChange={(e) => data.onChange(id, 'maxOrderValue', e.target.value === "" ? "" : parseFloat(e.target.value))} />
+        <span className="text-[9px] text-muted block mt-1">Safety guard: rejects live orders exceeding this USD value</span>
       </div>
-      <div className="pt-2 border-t border-[#202532]">
-        <label className="text-[10px] text-[#848e9c] font-bold uppercase mb-1.5 block">Live Execution Mode</label>
-        <select className="w-full bg-[#12151c] border border-[#202532] text-[#eaecef] text-xs rounded p-2 nodrag focus:border-[#8b5cf6] outline-none" value={data.executionMode !== undefined ? data.executionMode : "paper"} onChange={(e) => data.onChange(id, 'executionMode', e.target.value)}>
+      <div className="pt-2 border-t border-border">
+        <label className="text-[10px] text-muted font-bold uppercase mb-1.5 block">Live Execution Mode</label>
+        <select className="w-full bg-inset border border-border text-text text-xs rounded-md p-2 nodrag focus:border-purple outline-none" value={data.executionMode !== undefined ? data.executionMode : "paper"} onChange={(e) => data.onChange(id, 'executionMode', e.target.value)}>
           <option value="paper">Paper Trading (Simulated Execution)</option>
           <option value="exchange">Live Exchange (Requires API Key)</option>
         </select>
@@ -188,15 +188,15 @@ export const BotConfigNode = ({ id, data }) => (
 );
 
 export const WhitelistNode = ({ id, data }) => (
-  <div className="bg-[#12151c]/90 backdrop-blur-xl border border-[#d946ef] rounded-xl shadow-lg min-w-[260px]">
-    <div className="bg-[#d946ef]/10 px-3 py-2 border-b border-[#d946ef]/30 flex justify-between items-center">
-      <span className="font-bold text-[#d946ef] text-[11px] uppercase tracking-wider">ASSET WHITELIST</span>
-      {data.onDelete && <button onClick={() => data.onDelete(id)} className="text-[#848e9c] hover:text-[#f6465d] transition-colors">✕</button>}
+  <div className="bg-raised/90 backdrop-blur-xl border border-warn rounded-xl shadow-lg min-w-[260px]">
+    <div className="bg-warn/10 px-3 py-2 border-b border-warn/30 flex justify-between items-center">
+      <span className="font-bold text-warn text-[11px] uppercase tracking-wider">ASSET WHITELIST</span>
+      {data.onDelete && <button onClick={() => data.onDelete(id)} className="text-muted hover:text-danger transition-colors">✕</button>}
     </div>
-    <div className="p-4 bg-[#080a0f]/80 rounded-b">
-      <label className="text-[10px] text-[#848e9c] font-bold uppercase mb-1.5 block">Tradeable Pairs (Comma Separated)</label>
+    <div className="p-4 bg-bg/80 rounded-b">
+      <label className="text-[10px] text-muted font-bold uppercase mb-1.5 block">Tradeable Pairs (Comma Separated)</label>
       <textarea 
-        className="w-full bg-[#12151c] border border-[#202532] text-[#eaecef] text-xs rounded p-2 nodrag focus:border-[#d946ef] outline-none min-h-[60px] resize-none font-mono"
+        className="w-full bg-inset border border-border text-text text-xs rounded-md p-2 nodrag focus:border-warn outline-none min-h-[60px] resize-none font-num"
         placeholder="BTC/USDT, ETH/USDT, SOL/USDT"
         value={data.pairs !== undefined ? data.pairs : "BTC/USDT"}
         onChange={(e) => data.onChange(id, 'pairs', e.target.value)}
@@ -206,24 +206,24 @@ export const WhitelistNode = ({ id, data }) => (
 );
 
 export const BacktestNode = ({ id, data }) => (
-  <div className="bg-[#12151c]/90 backdrop-blur-xl border border-[#fcd535] rounded-xl shadow-lg min-w-[280px]">
-    <div className="bg-[#fcd535]/10 px-3 py-2 border-b border-[#fcd535]/30 flex justify-between items-center">
-      <span className="font-bold text-[#fcd535] text-[11px] uppercase tracking-wider">BACKTEST ENGINE</span>
-      {data.onDelete && <button onClick={() => data.onDelete(id)} className="text-[#848e9c] hover:text-[#f6465d] transition-colors">✕</button>}
+  <div className="bg-raised/90 backdrop-blur-xl border border-accent rounded-xl shadow-lg min-w-[280px]">
+    <div className="bg-accent/10 px-3 py-2 border-b border-accent/30 flex justify-between items-center">
+      <span className="font-bold text-accent text-[11px] uppercase tracking-wider">BACKTEST ENGINE</span>
+      {data.onDelete && <button onClick={() => data.onDelete(id)} className="text-muted hover:text-danger transition-colors">✕</button>}
     </div>
-    <div className="p-4 bg-[#080a0f]/80 rounded-b space-y-4">
+    <div className="p-4 bg-bg/80 rounded-b space-y-4">
       <label className="flex items-center cursor-pointer nodrag">
-        <input type="checkbox" className="form-checkbox h-4 w-4 text-[#fcd535] rounded border-[#202532] bg-[#12151c] focus:ring-0 focus:ring-offset-0" checked={data.runOnStart !== false} onChange={(e) => data.onChange(id, 'runOnStart', e.target.checked)} />
-        <span className="ml-3 text-xs text-[#eaecef] font-medium">Run historical backtest on start</span>
+        <input type="checkbox" className="form-checkbox h-4 w-4 text-accent rounded border-border bg-inset focus:ring-0 focus:ring-offset-0" checked={data.runOnStart !== false} onChange={(e) => data.onChange(id, 'runOnStart', e.target.checked)} />
+        <span className="ml-3 text-xs text-text font-medium">Run historical backtest on start</span>
       </label>
-      <div className="flex space-x-2 pt-2 border-t border-[#202532]">
+      <div className="flex space-x-2 pt-2 border-t border-border">
         <div className="w-1/2">
-            <label className="text-[10px] text-[#848e9c] font-bold uppercase mb-1.5 block">Start Capital</label>
-            <input type="number" className="w-full bg-[#12151c] border border-[#202532] text-[#fcd535] text-xs rounded p-2 nodrag focus:border-[#fcd535] outline-none font-mono text-center" value={data.capital !== undefined ? data.capital : 1000} onChange={(e) => data.onChange(id, 'capital', e.target.value === "" ? "" : parseFloat(e.target.value))} />
+            <label className="text-[10px] text-muted font-bold uppercase mb-1.5 block">Start Capital</label>
+            <input type="number" className="w-full bg-inset border border-border text-accent text-xs rounded-md p-2 nodrag focus:border-accent outline-none font-num text-center" value={data.capital !== undefined ? data.capital : 1000} onChange={(e) => data.onChange(id, 'capital', e.target.value === "" ? "" : parseFloat(e.target.value))} />
         </div>
         <div className="w-1/2">
-            <label className="text-[10px] text-[#848e9c] font-bold uppercase mb-1.5 block">Candles (Lookback)</label>
-            <input type="number" className="w-full bg-[#12151c] border border-[#202532] text-[#fcd535] text-xs rounded p-2 nodrag focus:border-[#fcd535] outline-none font-mono text-center" value={data.lookback !== undefined ? data.lookback : 150} onChange={(e) => data.onChange(id, 'lookback', e.target.value === "" ? "" : parseInt(e.target.value))} />
+            <label className="text-[10px] text-muted font-bold uppercase mb-1.5 block">Candles (Lookback)</label>
+            <input type="number" className="w-full bg-inset border border-border text-accent text-xs rounded-md p-2 nodrag focus:border-accent outline-none font-num text-center" value={data.lookback !== undefined ? data.lookback : 150} onChange={(e) => data.onChange(id, 'lookback', e.target.value === "" ? "" : parseInt(e.target.value))} />
         </div>
       </div>
     </div>
@@ -246,15 +246,15 @@ export const ApiKeyNode = ({ id, data }) => {
   const derivedExchange = keyRecord?.exchange || null;
 
   return (
-    <div className="bg-[#12151c]/90 backdrop-blur-xl border border-[#0ea5e9] rounded-xl shadow-lg min-w-[260px]">
-      <div className="bg-[#0ea5e9]/10 px-3 py-2 border-b border-[#0ea5e9]/30 flex justify-between items-center">
-        <span className="font-bold text-[#0ea5e9] text-[11px] uppercase tracking-wider">EXCHANGE ROUTING</span>
-        {data.onDelete && <button onClick={() => data.onDelete(id)} className="text-[#848e9c] hover:text-[#f6465d] transition-colors">✕</button>}
+    <div className="bg-raised/90 backdrop-blur-xl border border-info rounded-xl shadow-lg min-w-[260px]">
+      <div className="bg-info/10 px-3 py-2 border-b border-info/30 flex justify-between items-center">
+        <span className="font-bold text-info text-[11px] uppercase tracking-wider">EXCHANGE ROUTING</span>
+        {data.onDelete && <button onClick={() => data.onDelete(id)} className="text-muted hover:text-danger transition-colors">✕</button>}
       </div>
-      <div className="p-4 bg-[#080a0f]/80 rounded-b space-y-3">
+      <div className="p-4 bg-bg/80 rounded-b space-y-3">
         <div>
-          <label className="text-[10px] text-[#848e9c] font-bold uppercase mb-1.5 block">Select API Credentials</label>
-          <select className="w-full bg-[#12151c] border border-[#202532] text-[#eaecef] text-xs rounded p-2 nodrag focus:border-[#0ea5e9] outline-none" value={selectedKey} onChange={(e) => data.onChange(id, 'apiKeyName', e.target.value)}>
+          <label className="text-[10px] text-muted font-bold uppercase mb-1.5 block">Select API Credentials</label>
+          <select className="w-full bg-inset border border-border text-text text-xs rounded-md p-2 nodrag focus:border-info outline-none" value={selectedKey} onChange={(e) => data.onChange(id, 'apiKeyName', e.target.value)}>
             <option value="">No key (select exchange below)</option>
             {data.availableKeys?.map(k => (
               <option key={k.name} value={k.name}>{k.name} ({k.is_sandbox ? 'Sandbox' : 'Live'})</option>
@@ -263,13 +263,13 @@ export const ApiKeyNode = ({ id, data }) => {
         </div>
         {derivedExchange ? (
           <div className="flex items-center space-x-2 px-1">
-            <div className="w-1.5 h-1.5 rounded-full bg-[#2ebd85] shadow-[0_0_6px_#2ebd85]" />
-            <span className="text-[10px] text-[#848e9c] uppercase font-bold">Exchange: <span className="text-[#2ebd85]">{derivedExchange.toUpperCase()}</span></span>
+            <div className="w-1.5 h-1.5 rounded-full bg-success shadow-[0_0_6px_#2ebd85]" />
+            <span className="text-[10px] text-muted uppercase font-bold">Exchange: <span className="text-success">{derivedExchange.toUpperCase()}</span></span>
           </div>
         ) : (
           <div>
-            <label className="text-[10px] text-[#848e9c] font-bold uppercase mb-1.5 block">Data Exchange</label>
-            <select className="w-full bg-[#12151c] border border-[#202532] text-[#eaecef] text-xs rounded p-2 nodrag focus:border-[#0ea5e9] outline-none" value={data.dataExchange || 'okx'} onChange={(e) => data.onChange(id, 'dataExchange', e.target.value)}>
+            <label className="text-[10px] text-muted font-bold uppercase mb-1.5 block">Data Exchange</label>
+            <select className="w-full bg-inset border border-border text-text text-xs rounded-md p-2 nodrag focus:border-info outline-none" value={data.dataExchange || 'okx'} onChange={(e) => data.onChange(id, 'dataExchange', e.target.value)}>
               {API_KEY_NODE_EXCHANGES.map(ex => (
                 <option key={ex.id} value={ex.id}>{ex.name}</option>
               ))}
@@ -299,14 +299,14 @@ export const IndicatorNode = ({ id, data }) => {
   };
 
   return (
-  <div className="bg-[#12151c]/90 backdrop-blur-xl border border-[#202532] rounded-xl shadow-lg min-w-[250px] hover:border-[#fcd535] transition-all duration-200 relative">
-    <div className="bg-[#202532] px-3 py-2 flex justify-between items-center">
-      <span className="font-bold text-[#eaecef] text-[11px] uppercase tracking-wider">TECHNICAL INDICATOR</span>
-      {data.onDelete && <button onClick={() => data.onDelete(id)} className="text-[#848e9c] hover:text-[#f6465d] transition-colors">✕</button>}
+  <div className="bg-raised/90 backdrop-blur-xl border border-border rounded-xl shadow-lg min-w-[250px] hover:border-accent transition-all duration-200 relative">
+    <div className="bg-overlay px-3 py-2 flex justify-between items-center">
+      <span className="font-bold text-text text-[11px] uppercase tracking-wider">TECHNICAL INDICATOR</span>
+      {data.onDelete && <button onClick={() => data.onDelete(id)} className="text-muted hover:text-danger transition-colors">✕</button>}
     </div>
-    <div className="p-4 space-y-3 bg-[#080a0f]/80 rounded-b">
+    <div className="p-4 space-y-3 bg-bg/80 rounded-b">
       
-      <select className="w-full bg-[#12151c] border border-[#202532] text-[#eaecef] text-[11px] rounded p-2 nodrag focus:border-[#fcd535] outline-none font-semibold" value={currentIndKey} onChange={(e) => data.onChange(id, 'indicator', e.target.value)}>
+      <select className="w-full bg-inset border border-border text-text text-[11px] rounded-md p-2 nodrag focus:border-accent outline-none font-semibold" value={currentIndKey} onChange={(e) => data.onChange(id, 'indicator', e.target.value)}>
           {Object.entries(INDICATOR_GROUPS).map(([groupName, indicators]) => (
               <optgroup key={groupName} label={groupName}>
                   {Object.keys(indicators).map(key => (
@@ -317,14 +317,14 @@ export const IndicatorNode = ({ id, data }) => {
       </select>
 
       {indDef.params && indDef.params.length > 0 && (
-          <div className="border-t border-[#202532] pt-3 space-y-2">
+          <div className="border-t border-border pt-3 space-y-2">
               {indDef.params.map(p => (
                   <div key={p.id} className="flex items-center space-x-2">
-                    <span className="text-[10px] text-[#848e9c] font-bold uppercase flex-1">{p.label}</span>
+                    <span className="text-[10px] text-muted font-bold uppercase flex-1">{p.label}</span>
                     <input 
                         type="number" 
                         step="any"
-                        className="w-16 bg-[#12151c] border border-[#202532] text-[#fcd535] text-xs rounded p-1 nodrag text-right font-mono focus:border-[#fcd535] outline-none" 
+                        className="w-16 bg-inset border border-border text-accent text-xs rounded-md p-1 nodrag text-right font-num focus:border-accent outline-none" 
                         value={currentParams[p.id] !== undefined ? currentParams[p.id] : p.default} 
                         onChange={(e) => handleParamChange(p.id, e.target.value)} 
                     />
@@ -334,9 +334,9 @@ export const IndicatorNode = ({ id, data }) => {
       )}
 
       {showDropdown && (
-        <div className="border-t border-[#202532] pt-3 mt-3 animate-fade-in">
-          <label className="text-[9px] text-[#0ea5e9] font-bold uppercase mb-1.5 block">Signal Output (Multi-Line)</label>
-          <select className="w-full bg-[#12151c] border border-[#0ea5e9]/50 text-[#eaecef] text-[10px] rounded p-1.5 focus:border-[#0ea5e9] outline-none" value={data.outputIdx !== undefined ? data.outputIdx : 0} onChange={(e) => data.onChange(id, 'outputIdx', parseInt(e.target.value))}>
+        <div className="border-t border-border pt-3 mt-3 animate-fade-in">
+          <label className="text-[9px] text-info font-bold uppercase mb-1.5 block">Signal Output (Multi-Line)</label>
+          <select className="w-full bg-inset border border-info/50 text-text text-[10px] rounded-md p-1.5 focus:border-info outline-none" value={data.outputIdx !== undefined ? data.outputIdx : 0} onChange={(e) => data.onChange(id, 'outputIdx', parseInt(e.target.value))}>
             {indDef.lines.map((lineName, idx) => (
                 <option key={idx} value={idx}>{lineName} (Idx: {idx})</option>
             ))}
@@ -345,21 +345,21 @@ export const IndicatorNode = ({ id, data }) => {
       )}
 
     </div>
-    <Handle type="source" position={Position.Right} style={{ top: '50%' }} className="w-10 h-10 bg-[#fcd535] border-[4px] border-[#12151c] -right-[20px]" />
+    <Handle type="source" position={Position.Right} style={{ top: '50%' }} className="w-10 h-10 bg-accent border-[4px] border-raised -right-[20px]" />
   </div>
   );
 };
 
 export const PriceDataNode = ({ id, data }) => (
-  <div className="bg-[#12151c]/90 backdrop-blur-xl border border-[#202532] rounded-xl shadow-lg min-w-[220px] hover:border-[#fcd535] transition-all duration-200 relative">
-    <div className="bg-[#202532]/30 px-3 py-2 border-b border-[#202532]/50 flex justify-between items-center">
-      <span className="font-bold text-[#eaecef] text-[11px] uppercase tracking-wider">PRICE DATA</span>
-      {data.onDelete && <button onClick={() => data.onDelete(id)} className="text-[#848e9c] hover:text-[#f6465d] transition-colors">✕</button>}
+  <div className="bg-raised/90 backdrop-blur-xl border border-border rounded-xl shadow-lg min-w-[220px] hover:border-accent transition-all duration-200 relative">
+    <div className="bg-overlay/60 px-3 py-2 border-b border-border/50 flex justify-between items-center">
+      <span className="font-bold text-text text-[11px] uppercase tracking-wider">PRICE DATA</span>
+      {data.onDelete && <button onClick={() => data.onDelete(id)} className="text-muted hover:text-danger transition-colors">✕</button>}
     </div>
-    <div className="p-4 space-y-3 bg-[#080a0f]/80 rounded-b">
+    <div className="p-4 space-y-3 bg-bg/80 rounded-b">
       <div>
-        <label className="text-[10px] text-[#848e9c] font-bold uppercase mb-1.5 block">Price Type</label>
-        <select className="w-full bg-[#12151c] border border-[#202532] text-[#eaecef] text-xs rounded p-2 nodrag focus:border-[#fcd535] outline-none font-semibold" value={data.priceType !== undefined ? data.priceType : "close"} onChange={(e) => data.onChange(id, 'priceType', e.target.value)}>
+        <label className="text-[10px] text-muted font-bold uppercase mb-1.5 block">Price Type</label>
+        <select className="w-full bg-inset border border-border text-text text-xs rounded-md p-2 nodrag focus:border-accent outline-none font-semibold" value={data.priceType !== undefined ? data.priceType : "close"} onChange={(e) => data.onChange(id, 'priceType', e.target.value)}>
           <option value="open">Open</option>
           <option value="high">High</option>
           <option value="low">Low</option>
@@ -367,35 +367,35 @@ export const PriceDataNode = ({ id, data }) => (
           <option value="volume">Volume</option>
         </select>
       </div>
-      <div className="border-t border-[#202532] pt-3">
-         <label className="text-[10px] text-[#848e9c] font-bold uppercase mb-1.5 block">Candle Offset</label>
-         <select className="w-full bg-[#12151c] border border-[#202532] text-[#eaecef] text-xs rounded p-2 nodrag focus:border-[#fcd535] outline-none font-semibold" value={data.offset !== undefined ? data.offset : 0} onChange={(e) => data.onChange(id, 'offset', parseInt(e.target.value))}>
+      <div className="border-t border-border pt-3">
+         <label className="text-[10px] text-muted font-bold uppercase mb-1.5 block">Candle Offset</label>
+         <select className="w-full bg-inset border border-border text-text text-xs rounded-md p-2 nodrag focus:border-accent outline-none font-semibold" value={data.offset !== undefined ? data.offset : 0} onChange={(e) => data.onChange(id, 'offset', parseInt(e.target.value))}>
             <option value={0}>Current (Live)</option>
             <option value={1}>Previous (Closed)</option>
             <option value={2}>2 Candles Ago</option>
          </select>
       </div>
     </div>
-    <Handle type="source" position={Position.Right} style={{ top: '50%' }} className="w-10 h-10 bg-[#fcd535] border-[4px] border-[#12151c] -right-[20px]" />
+    <Handle type="source" position={Position.Right} style={{ top: '50%' }} className="w-10 h-10 bg-accent border-[4px] border-raised -right-[20px]" />
   </div>
 );
 
 export const ConditionNode = ({ id, data }) => (
-  <div className="bg-[#12151c]/90 backdrop-blur-xl border border-[#202532] rounded-xl shadow-lg min-w-[260px] relative">
-    <Handle type="target" position={Position.Left} id="left" style={{ top: '38%' }} className="w-10 h-10 bg-[#0ea5e9] border-[4px] border-[#12151c] -left-[20px]" />
-    <Handle type="target" position={Position.Left} id="right" style={{ top: '80%' }} className="w-10 h-10 bg-[#d946ef] border-[4px] border-[#12151c] -left-[20px]" />
+  <div className="bg-raised/90 backdrop-blur-xl border border-border rounded-xl shadow-lg min-w-[260px] relative">
+    <Handle type="target" position={Position.Left} id="left" style={{ top: '38%' }} className="w-10 h-10 bg-info border-[4px] border-raised -left-[20px]" />
+    <Handle type="target" position={Position.Left} id="right" style={{ top: '80%' }} className="w-10 h-10 bg-purple border-[4px] border-raised -left-[20px]" />
     
-    <div className="bg-[#202532]/30 px-3 py-2 border-b border-[#202532]/50 flex justify-between items-center">
-      <span className="font-bold text-[#eaecef] text-[11px] uppercase tracking-wider">DATA CONDITION</span>
-      {data.onDelete && <button onClick={() => data.onDelete(id)} className="text-[#848e9c] hover:text-[#f6465d] transition-colors">✕</button>}
+    <div className="bg-overlay/60 px-3 py-2 border-b border-border/50 flex justify-between items-center">
+      <span className="font-bold text-text text-[11px] uppercase tracking-wider">DATA CONDITION</span>
+      {data.onDelete && <button onClick={() => data.onDelete(id)} className="text-muted hover:text-danger transition-colors">✕</button>}
     </div>
     
-    <div className="p-4 bg-[#080a0f]/80 rounded-b flex flex-col space-y-4">
+    <div className="p-4 bg-bg/80 rounded-b flex flex-col space-y-4">
       <div className="flex items-center">
-         <span className="text-[10px] text-[#0ea5e9] font-bold uppercase ml-1">Input A (Signal)</span>
+         <span className="text-[10px] text-info font-bold uppercase ml-1">Input A (Signal)</span>
       </div>
-      <div className="flex justify-center border-y border-[#202532] py-2">
-        <select className="w-full bg-[#12151c] border border-[#202532] text-[#fcd535] text-xs rounded p-2 nodrag font-bold focus:border-[#fcd535] outline-none text-center" value={data.operator !== undefined ? data.operator : ">"} onChange={(e) => data.onChange(id, 'operator', e.target.value)}>
+      <div className="flex justify-center border-y border-border py-2">
+        <select className="w-full bg-inset border border-border text-accent text-xs rounded-md p-2 nodrag font-bold focus:border-accent outline-none text-center" value={data.operator !== undefined ? data.operator : ">"} onChange={(e) => data.onChange(id, 'operator', e.target.value)}>
           <option value=">">IS GREATER THAN (&gt;)</option>
           <option value="<">IS LESS THAN (&lt;)</option>
           <option value="==">IS EQUAL TO (==)</option>
@@ -411,32 +411,32 @@ export const ConditionNode = ({ id, data }) => (
         </select>
       </div>
       <div className={`flex items-center justify-between transition-opacity ${['increasing', 'decreasing'].includes(data.operator) ? 'opacity-30 pointer-events-none' : 'opacity-100'}`}>
-         <span className="text-[10px] text-[#d946ef] font-bold uppercase ml-1">Input B</span>
+         <span className="text-[10px] text-purple font-bold uppercase ml-1">Input B</span>
          <div className="flex items-center space-x-2">
-           <span className="text-[9px] text-[#848e9c] font-bold">OR</span>
-           <input type="number" placeholder="Static Value" title="Connect a line to Input B or type a static number here." className="w-20 bg-[#12151c] border border-[#202532] text-[#eaecef] text-xs rounded p-1.5 nodrag font-mono focus:border-[#fcd535] outline-none text-center" value={data.rightValue !== undefined ? data.rightValue : ""} onChange={(e) => data.onChange(id, 'rightValue', e.target.value === "" ? "" : parseFloat(e.target.value))} disabled={['increasing', 'decreasing'].includes(data.operator)} />
+           <span className="text-[9px] text-muted font-bold">OR</span>
+           <input type="number" placeholder="Static Value" title="Connect a line to Input B or type a static number here." className="w-20 bg-inset border border-border text-text text-xs rounded-md p-1.5 nodrag font-num focus:border-accent outline-none text-center" value={data.rightValue !== undefined ? data.rightValue : ""} onChange={(e) => data.onChange(id, 'rightValue', e.target.value === "" ? "" : parseFloat(e.target.value))} disabled={['increasing', 'decreasing'].includes(data.operator)} />
          </div>
       </div>
     </div>
     
-    <Handle type="source" position={Position.Right} style={{ top: '50%' }} className="w-10 h-10 bg-[#fcd535] border-[4px] border-[#12151c] -right-[20px]" />
+    <Handle type="source" position={Position.Right} style={{ top: '50%' }} className="w-10 h-10 bg-accent border-[4px] border-raised -right-[20px]" />
   </div>
 );
 
 export const LogicNode = ({ id, data }) => {
   const isSingleInput = data.logicType === "not";
   return (
-    <div className="bg-[#12151c]/90 backdrop-blur-xl border border-[#2ea043] rounded-xl shadow-lg min-w-[200px] relative">
-      <Handle type="target" position={Position.Left} id="in1" style={{ top: isSingleInput ? '50%' : '35%' }} className="w-10 h-10 bg-[#848e9c] border-[4px] border-[#12151c] -left-[20px]" />
+    <div className="bg-raised/90 backdrop-blur-xl border border-success rounded-xl shadow-lg min-w-[200px] relative">
+      <Handle type="target" position={Position.Left} id="in1" style={{ top: isSingleInput ? '50%' : '35%' }} className="w-10 h-10 bg-muted border-[4px] border-raised -left-[20px]" />
       {!isSingleInput && (
-        <Handle type="target" position={Position.Left} id="in2" style={{ top: '65%' }} className="w-10 h-10 bg-[#848e9c] border-[4px] border-[#12151c] -left-[20px]" />
+        <Handle type="target" position={Position.Left} id="in2" style={{ top: '65%' }} className="w-10 h-10 bg-muted border-[4px] border-raised -left-[20px]" />
       )}
-      <div className="bg-[#2ea043]/10 px-3 py-2 border-b border-[#2ea043]/30 flex justify-between items-center">
-        <span className="font-bold text-[#2ea043] text-[11px] uppercase tracking-wider">LOGIC GATE</span>
-        {data.onDelete && <button onClick={() => data.onDelete(id)} className="text-[#848e9c] hover:text-[#f6465d] transition-colors">✕</button>}
+      <div className="bg-success/10 px-3 py-2 border-b border-success/30 flex justify-between items-center">
+        <span className="font-bold text-success text-[11px] uppercase tracking-wider">LOGIC GATE</span>
+        {data.onDelete && <button onClick={() => data.onDelete(id)} className="text-muted hover:text-danger transition-colors">✕</button>}
       </div>
-      <div className="p-4 bg-[#080a0f]/80 rounded-b">
-        <select className="w-full bg-[#12151c] border border-[#202532] text-[#eaecef] text-xs rounded p-2 nodrag font-bold text-center focus:border-[#2ea043] outline-none" value={data.logicType !== undefined ? data.logicType : "and"} onChange={(e) => data.onChange(id, 'logicType', e.target.value)}>
+      <div className="p-4 bg-bg/80 rounded-b">
+        <select className="w-full bg-inset border border-border text-text text-xs rounded-md p-2 nodrag font-bold text-center focus:border-success outline-none" value={data.logicType !== undefined ? data.logicType : "and"} onChange={(e) => data.onChange(id, 'logicType', e.target.value)}>
           <option value="and">AND (Require Both)</option>
           <option value="or">OR (Require Either)</option>
           <option value="xor">XOR (Exclusive OR)</option>
@@ -445,7 +445,7 @@ export const LogicNode = ({ id, data }) => {
           <option value="not">NOT (Invert Input)</option>
         </select>
       </div>
-      <Handle type="source" position={Position.Right} style={{ top: '50%' }} className="w-10 h-10 bg-[#fcd535] border-[4px] border-[#12151c] -right-[20px]" />
+      <Handle type="source" position={Position.Right} style={{ top: '50%' }} className="w-10 h-10 bg-accent border-[4px] border-raised -right-[20px]" />
     </div>
   );
 };
@@ -455,38 +455,38 @@ export const LogicNode = ({ id, data }) => {
 // ==========================================
 
 export const StopLossNode = ({ id, data }) => (
-  <div className="bg-[#12151c]/90 backdrop-blur-xl border border-[#f6465d] rounded-xl shadow-lg min-w-[280px] relative">
+  <div className="bg-raised/90 backdrop-blur-xl border border-danger rounded-xl shadow-lg min-w-[280px] relative">
     
-    <Handle type="target" position={Position.Left} style={{ top: '50%' }} className="w-10 h-10 bg-[#f6465d] border-[4px] border-[#12151c] -left-[20px]" />
+    <Handle type="target" position={Position.Left} style={{ top: '50%' }} className="w-10 h-10 bg-danger border-[4px] border-raised -left-[20px]" />
     
-    <div className="bg-[#f6465d]/10 px-3 py-2 border-b border-[#f6465d]/30 flex justify-between items-center">
-      <span className="font-bold text-[#f6465d] text-[11px] uppercase tracking-wider">STOP LOSS (RISK)</span>
+    <div className="bg-danger/10 px-3 py-2 border-b border-danger/30 flex justify-between items-center">
+      <span className="font-bold text-danger text-[11px] uppercase tracking-wider">STOP LOSS (RISK)</span>
       <div className="flex space-x-3 items-center">
-        <span className="text-[9px] text-[#848e9c] font-mono">&larr; IN</span>
-        {data.onDelete && <button onClick={() => data.onDelete(id)} className="text-[#848e9c] hover:text-[#f6465d] transition-colors">✕</button>}
+        <span className="text-[9px] text-muted font-num">&larr; IN</span>
+        {data.onDelete && <button onClick={() => data.onDelete(id)} className="text-muted hover:text-danger transition-colors">✕</button>}
       </div>
     </div>
-    <div className="p-4 bg-[#080a0f]/80 rounded-b space-y-4">
+    <div className="p-4 bg-bg/80 rounded-b space-y-4">
       <div>
-        <label className="text-[10px] text-[#848e9c] font-bold uppercase mb-1.5 block">Trigger Level (Loss)</label>
+        <label className="text-[10px] text-muted font-bold uppercase mb-1.5 block">Trigger Level (Loss)</label>
         <div className="flex space-x-2">
-            <select className="w-1/2 bg-[#12151c] border border-[#202532] text-[#eaecef] text-[10px] font-bold rounded p-2 nodrag focus:border-[#f6465d] outline-none" value={data.triggerType !== undefined ? data.triggerType : "percentage"} onChange={(e) => data.onChange(id, 'triggerType', e.target.value)}>
+            <select className="w-1/2 bg-inset border border-border text-text text-[10px] font-bold rounded-md p-2 nodrag focus:border-danger outline-none" value={data.triggerType !== undefined ? data.triggerType : "percentage"} onChange={(e) => data.onChange(id, 'triggerType', e.target.value)}>
                 <option value="percentage">Percentage (%)</option>
                 <option value="trailing">Trailing (%)</option>
                 <option value="atr">ATR Trailing (x)</option>
                 <option value="fixed">Fixed Price</option>
             </select>
-            <input type="number" placeholder={data.triggerType === 'atr' ? "Multiplier (e.g. 2.5)" : "Value"} className="w-1/2 bg-[#12151c] border border-[#202532] text-[#f6465d] text-xs rounded p-2 nodrag font-mono focus:border-[#f6465d] outline-none text-center" value={data.triggerValue !== undefined ? data.triggerValue : ""} onChange={(e) => data.onChange(id, 'triggerValue', e.target.value === "" ? "" : parseFloat(e.target.value))} />
+            <input type="number" placeholder={data.triggerType === 'atr' ? "Multiplier (e.g. 2.5)" : "Value"} className="w-1/2 bg-inset border border-border text-danger text-xs rounded-md p-2 nodrag font-num focus:border-danger outline-none text-center" value={data.triggerValue !== undefined ? data.triggerValue : ""} onChange={(e) => data.onChange(id, 'triggerValue', e.target.value === "" ? "" : parseFloat(e.target.value))} />
         </div>
       </div>
-      <div className="pt-3 border-t border-[#202532]">
-        <label className="text-[10px] text-[#848e9c] font-bold uppercase mb-1.5 block">Amount to Close</label>
+      <div className="pt-3 border-t border-border">
+        <label className="text-[10px] text-muted font-bold uppercase mb-1.5 block">Amount to Close</label>
         <div className="flex space-x-2">
-            <select className="w-1/2 bg-[#12151c] border border-[#202532] text-[#eaecef] text-xs rounded p-2 nodrag focus:border-[#f6465d] outline-none" value={data.closeType !== undefined ? data.closeType : "percentage"} onChange={(e) => data.onChange(id, 'closeType', e.target.value)}>
+            <select className="w-1/2 bg-inset border border-border text-text text-xs rounded-md p-2 nodrag focus:border-danger outline-none" value={data.closeType !== undefined ? data.closeType : "percentage"} onChange={(e) => data.onChange(id, 'closeType', e.target.value)}>
                 <option value="percentage">% of Position</option>
                 <option value="fixed">Fixed Amount</option>
             </select>
-            <input type="number" placeholder="100" className="w-1/2 bg-[#12151c] border border-[#202532] text-[#eaecef] text-xs rounded p-2 nodrag font-mono focus:border-[#f6465d] outline-none text-center" value={data.closeValue !== undefined ? data.closeValue : 100} onChange={(e) => data.onChange(id, 'closeValue', e.target.value === "" ? "" : parseFloat(e.target.value))} />
+            <input type="number" placeholder="100" className="w-1/2 bg-inset border border-border text-text text-xs rounded-md p-2 nodrag font-num focus:border-danger outline-none text-center" value={data.closeValue !== undefined ? data.closeValue : 100} onChange={(e) => data.onChange(id, 'closeValue', e.target.value === "" ? "" : parseFloat(e.target.value))} />
         </div>
       </div>
     </div>
@@ -494,38 +494,38 @@ export const StopLossNode = ({ id, data }) => (
 );
 
 export const TakeProfitNode = ({ id, data }) => (
-  <div className="bg-[#12151c]/90 backdrop-blur-xl border border-[#2ebd85] rounded-xl shadow-lg min-w-[280px] relative">
+  <div className="bg-raised/90 backdrop-blur-xl border border-success rounded-xl shadow-lg min-w-[280px] relative">
     
-    <Handle type="target" position={Position.Left} style={{ top: '50%' }} className="w-10 h-10 bg-[#2ebd85] border-[4px] border-[#12151c] -left-[20px]" />
+    <Handle type="target" position={Position.Left} style={{ top: '50%' }} className="w-10 h-10 bg-success border-[4px] border-raised -left-[20px]" />
 
-    <div className="bg-[#2ebd85]/10 px-3 py-2 border-b border-[#2ebd85]/30 flex justify-between items-center">
-      <span className="font-bold text-[#2ebd85] text-[11px] uppercase tracking-wider">TAKE PROFIT (TARGET)</span>
+    <div className="bg-success/10 px-3 py-2 border-b border-success/30 flex justify-between items-center">
+      <span className="font-bold text-success text-[11px] uppercase tracking-wider">TAKE PROFIT (TARGET)</span>
       <div className="flex space-x-3 items-center">
-        <span className="text-[9px] text-[#848e9c] font-mono">&larr; IN</span>
-        {data.onDelete && <button onClick={() => data.onDelete(id)} className="text-[#848e9c] hover:text-[#f6465d] transition-colors">✕</button>}
+        <span className="text-[9px] text-muted font-num">&larr; IN</span>
+        {data.onDelete && <button onClick={() => data.onDelete(id)} className="text-muted hover:text-danger transition-colors">✕</button>}
       </div>
     </div>
-    <div className="p-4 bg-[#080a0f]/80 rounded-b space-y-4">
+    <div className="p-4 bg-bg/80 rounded-b space-y-4">
       <div>
-        <label className="text-[10px] text-[#848e9c] font-bold uppercase mb-1.5 block">Trigger Level (Profit)</label>
+        <label className="text-[10px] text-muted font-bold uppercase mb-1.5 block">Trigger Level (Profit)</label>
         <div className="flex space-x-2">
-            <select className="w-1/2 bg-[#12151c] border border-[#202532] text-[#eaecef] text-[10px] font-bold rounded p-2 nodrag focus:border-[#2ebd85] outline-none" value={data.triggerType !== undefined ? data.triggerType : "percentage"} onChange={(e) => data.onChange(id, 'triggerType', e.target.value)}>
+            <select className="w-1/2 bg-inset border border-border text-text text-[10px] font-bold rounded-md p-2 nodrag focus:border-success outline-none" value={data.triggerType !== undefined ? data.triggerType : "percentage"} onChange={(e) => data.onChange(id, 'triggerType', e.target.value)}>
                 <option value="percentage">Percentage (%)</option>
                 <option value="trailing">Trailing (%)</option>
                 <option value="atr">ATR Trailing (x)</option>
                 <option value="fixed">Fixed Price</option>
             </select>
-            <input type="number" placeholder={data.triggerType === 'atr' ? "Multiplier (e.g. 2.5)" : "Value"} className="w-1/2 bg-[#12151c] border border-[#202532] text-[#2ebd85] text-xs rounded p-2 nodrag font-mono focus:border-[#2ebd85] outline-none text-center" value={data.triggerValue !== undefined ? data.triggerValue : ""} onChange={(e) => data.onChange(id, 'triggerValue', e.target.value === "" ? "" : parseFloat(e.target.value))} />
+            <input type="number" placeholder={data.triggerType === 'atr' ? "Multiplier (e.g. 2.5)" : "Value"} className="w-1/2 bg-inset border border-border text-success text-xs rounded-md p-2 nodrag font-num focus:border-success outline-none text-center" value={data.triggerValue !== undefined ? data.triggerValue : ""} onChange={(e) => data.onChange(id, 'triggerValue', e.target.value === "" ? "" : parseFloat(e.target.value))} />
         </div>
       </div>
-      <div className="pt-3 border-t border-[#202532]">
-        <label className="text-[10px] text-[#848e9c] font-bold uppercase mb-1.5 block">Amount to Close</label>
+      <div className="pt-3 border-t border-border">
+        <label className="text-[10px] text-muted font-bold uppercase mb-1.5 block">Amount to Close</label>
         <div className="flex space-x-2">
-            <select className="w-1/2 bg-[#12151c] border border-[#202532] text-[#eaecef] text-xs rounded p-2 nodrag focus:border-[#2ebd85] outline-none" value={data.closeType !== undefined ? data.closeType : "percentage"} onChange={(e) => data.onChange(id, 'closeType', e.target.value)}>
+            <select className="w-1/2 bg-inset border border-border text-text text-xs rounded-md p-2 nodrag focus:border-success outline-none" value={data.closeType !== undefined ? data.closeType : "percentage"} onChange={(e) => data.onChange(id, 'closeType', e.target.value)}>
                 <option value="percentage">% of Position</option>
                 <option value="fixed">Fixed Amount</option>
             </select>
-            <input type="number" placeholder="100" className="w-1/2 bg-[#12151c] border border-[#202532] text-[#eaecef] text-xs rounded p-2 nodrag font-mono focus:border-[#2ebd85] outline-none text-center" value={data.closeValue !== undefined ? data.closeValue : 100} onChange={(e) => data.onChange(id, 'closeValue', e.target.value === "" ? "" : parseFloat(e.target.value))} />
+            <input type="number" placeholder="100" className="w-1/2 bg-inset border border-border text-text text-xs rounded-md p-2 nodrag font-num focus:border-success outline-none text-center" value={data.closeValue !== undefined ? data.closeValue : 100} onChange={(e) => data.onChange(id, 'closeValue', e.target.value === "" ? "" : parseFloat(e.target.value))} />
         </div>
       </div>
     </div>
@@ -538,33 +538,34 @@ export const TakeProfitNode = ({ id, data }) => (
 
 export const ActionNode = ({ id, data }) => {
   const isBuy = data.actionType === 'buy';
+  // Raw hex used in inline styles (border/accent tint) — mirrors success/danger CSS tokens
   const color = isBuy ? '#2ebd85' : '#f6465d';
   
   return (
-    <div className={`bg-[#12151c]/90 backdrop-blur-xl border-2 rounded-xl shadow-lg min-w-[320px]`} style={{ borderColor: color }}>
+    <div className={`bg-raised/90 backdrop-blur-xl border-2 rounded-xl shadow-lg min-w-[320px]`} style={{ borderColor: color }}>
       
       <div className="px-3 py-2 font-bold text-[11px] uppercase tracking-wider border-b flex justify-between items-center" style={{ backgroundColor: `${color}10`, color: color, borderColor: `${color}30` }}>
         <span>{isBuy ? 'ORDER ROUTING: LONG ENTRY' : 'ORDER ROUTING: CLOSE POSITION'}</span>
-        {data.onDelete && <button onClick={() => data.onDelete(id)} className="text-[#848e9c] hover:text-[#f6465d] transition-colors">✕</button>}
+        {data.onDelete && <button onClick={() => data.onDelete(id)} className="text-muted hover:text-danger transition-colors">✕</button>}
       </div>
       
-      <div className="p-4 bg-[#080a0f]/80 rounded-b space-y-4">
+      <div className="p-4 bg-bg/80 rounded-b space-y-4">
          
-         <div className="relative border border-[#202532] rounded p-3">
-             <Handle type="target" position={Position.Left} id="logic" className="w-10 h-10 bg-[#848e9c] border-[4px] border-[#12151c] -left-[20px]" style={{ top: '50%' }} />
-             <span className="absolute -left-14 top-1/2 -translate-y-1/2 text-[9px] font-bold text-[#848e9c] -rotate-90">LOGIC</span>
+         <div className="relative border border-border rounded-md p-3">
+             <Handle type="target" position={Position.Left} id="logic" className="w-10 h-10 bg-muted border-[4px] border-raised -left-[20px]" style={{ top: '50%' }} />
+             <span className="absolute -left-14 top-1/2 -translate-y-1/2 text-[9px] font-bold text-muted -rotate-90">LOGIC</span>
              
              <div className="flex space-x-2">
                 <div className="w-1/2">
-                    <label className="text-[9px] text-[#848e9c] font-bold uppercase mb-1 block">Direction</label>
-                    <select className="w-full bg-[#12151c] border border-[#202532] text-[#eaecef] text-xs rounded p-2 nodrag font-bold outline-none" style={{ color: color }} value={data.actionType !== undefined ? data.actionType : "buy"} onChange={(e) => data.onChange(id, 'actionType', e.target.value)}>
+                    <label className="text-[9px] text-muted font-bold uppercase mb-1 block">Direction</label>
+                    <select className="w-full bg-inset border border-border text-text text-xs rounded-md p-2 nodrag font-bold outline-none focus:border-info" style={{ color: color }} value={data.actionType !== undefined ? data.actionType : "buy"} onChange={(e) => data.onChange(id, 'actionType', e.target.value)}>
                         <option value="buy">BUY (Open)</option>
                         <option value="sell">SELL (Close)</option>
                     </select>
                 </div>
                 <div className="w-1/2">
-                    <label className="text-[9px] text-[#848e9c] font-bold uppercase mb-1 block">Order Type</label>
-                    <select className="w-full bg-[#12151c] border border-[#202532] text-[#eaecef] text-xs rounded p-2 nodrag outline-none focus:border-[#0ea5e9]" value={data.orderType !== undefined ? data.orderType : "market"} onChange={(e) => data.onChange(id, 'orderType', e.target.value)}>
+                    <label className="text-[9px] text-muted font-bold uppercase mb-1 block">Order Type</label>
+                    <select className="w-full bg-inset border border-border text-text text-xs rounded-md p-2 nodrag outline-none focus:border-info" value={data.orderType !== undefined ? data.orderType : "market"} onChange={(e) => data.onChange(id, 'orderType', e.target.value)}>
                         <option value="market">Market</option>
                         <option value="limit">Limit</option>
                     </select>
@@ -574,37 +575,37 @@ export const ActionNode = ({ id, data }) => {
 
          <div className="grid grid-cols-2 gap-2">
             <div>
-                <label className="text-[9px] text-[#848e9c] font-bold uppercase mb-1 block">Slippage (%)</label>
-                <input type="number" step="0.01" className="w-full bg-[#12151c] border border-[#202532] text-[#eaecef] text-xs rounded p-2 nodrag outline-none" value={data.slippage !== undefined ? data.slippage : 0.05} onChange={(e) => data.onChange(id, 'slippage', e.target.value === "" ? "" : parseFloat(e.target.value))} />
+                <label className="text-[9px] text-muted font-bold uppercase mb-1 block">Slippage (%)</label>
+                <input type="number" step="0.01" className="w-full bg-inset border border-border text-text text-xs rounded-md p-2 nodrag outline-none focus:border-info font-num" value={data.slippage !== undefined ? data.slippage : 0.05} onChange={(e) => data.onChange(id, 'slippage', e.target.value === "" ? "" : parseFloat(e.target.value))} />
             </div>
             <div>
-                <label className="text-[9px] text-[#848e9c] font-bold uppercase mb-1 block">Trading Fee (%)</label>
-                <input type="number" step="0.01" className="w-full bg-[#12151c] border border-[#202532] text-[#eaecef] text-xs rounded p-2 nodrag outline-none" value={data.fee !== undefined ? data.fee : 0.1} onChange={(e) => data.onChange(id, 'fee', e.target.value === "" ? "" : parseFloat(e.target.value))} />
+                <label className="text-[9px] text-muted font-bold uppercase mb-1 block">Trading Fee (%)</label>
+                <input type="number" step="0.01" className="w-full bg-inset border border-border text-text text-xs rounded-md p-2 nodrag outline-none focus:border-info font-num" value={data.fee !== undefined ? data.fee : 0.1} onChange={(e) => data.onChange(id, 'fee', e.target.value === "" ? "" : parseFloat(e.target.value))} />
             </div>
          </div>
 
-         <div className="border border-[#202532] rounded p-3">
-             <label className="text-[10px] text-[#848e9c] font-bold uppercase mb-1.5 block">{isBuy ? 'Entry Size' : 'Amount to Close'}</label>
+         <div className="border border-border rounded-md p-3">
+             <label className="text-[10px] text-muted font-bold uppercase mb-1.5 block">{isBuy ? 'Entry Size' : 'Amount to Close'}</label>
              <div className="flex space-x-2">
-                 <select className="w-1/2 bg-[#12151c] border border-[#202532] text-[#eaecef] text-xs rounded p-2 nodrag outline-none focus:border-[#0ea5e9]" value={data.amountType !== undefined ? data.amountType : "percentage"} onChange={(e) => data.onChange(id, 'amountType', e.target.value)}>
+                 <select className="w-1/2 bg-inset border border-border text-text text-xs rounded-md p-2 nodrag outline-none focus:border-info" value={data.amountType !== undefined ? data.amountType : "percentage"} onChange={(e) => data.onChange(id, 'amountType', e.target.value)}>
                      <option value="percentage">{isBuy ? '% of Capital' : '% of Position'}</option>
                      <option value="fixed">Fixed Amount</option>
                  </select>
-                 <input type="number" placeholder="100" className="w-1/2 bg-[#12151c] border border-[#202532] text-[#0ea5e9] text-xs rounded p-2 nodrag text-center font-mono focus:border-[#0ea5e9] outline-none" value={data.amountValue !== undefined ? data.amountValue : 100} onChange={(e) => data.onChange(id, 'amountValue', e.target.value === "" ? "" : parseFloat(e.target.value))} />
+                 <input type="number" placeholder="100" className="w-1/2 bg-inset border border-border text-info text-xs rounded-md p-2 nodrag text-center font-num focus:border-info outline-none" value={data.amountValue !== undefined ? data.amountValue : 100} onChange={(e) => data.onChange(id, 'amountValue', e.target.value === "" ? "" : parseFloat(e.target.value))} />
              </div>
          </div>
 
          {isBuy && (
-             <div className="relative border border-[#202532] rounded p-3 pt-4 pb-4 mt-2">
+             <div className="relative border border-border rounded-md p-3 pt-4 pb-4 mt-2">
                  
-                 <Handle type="source" position={Position.Right} id="tp" className="w-10 h-10 bg-[#2ebd85] border-[4px] border-[#12151c] -right-[20px]" style={{ top: '25%' }} />
-                 <span className="absolute right-[13px] top-[25%] -translate-y-1/2 text-[9px] font-bold text-[#2ebd85] pointer-events-none">TP</span>
+                 <Handle type="source" position={Position.Right} id="tp" className="w-10 h-10 bg-success border-[4px] border-raised -right-[20px]" style={{ top: '25%' }} />
+                 <span className="absolute right-[13px] top-[25%] -translate-y-1/2 text-[9px] font-bold text-success pointer-events-none">TP</span>
 
-                 <Handle type="source" position={Position.Right} id="sl" className="w-10 h-10 bg-[#f6465d] border-[4px] border-[#12151c] -right-[20px]" style={{ top: '75%' }} />
-                 <span className="absolute right-[13px] top-[75%] -translate-y-1/2 text-[9px] font-bold text-[#f6465d] pointer-events-none">SL</span>
+                 <Handle type="source" position={Position.Right} id="sl" className="w-10 h-10 bg-danger border-[4px] border-raised -right-[20px]" style={{ top: '75%' }} />
+                 <span className="absolute right-[13px] top-[75%] -translate-y-1/2 text-[9px] font-bold text-danger pointer-events-none">SL</span>
                  
-                 <div className="text-[9px] text-[#848e9c] italic text-center leading-relaxed">
-                     Connect Take Profit or Stop Loss blocks to the <span className="text-[#2ebd85] font-bold">TP</span> and <span className="text-[#f6465d] font-bold">SL</span> ports on the right.
+                 <div className="text-[9px] text-muted italic text-center leading-relaxed">
+                     Connect Take Profit or Stop Loss blocks to the <span className="text-success font-bold">TP</span> and <span className="text-danger font-bold">SL</span> ports on the right.
                  </div>
              </div>
          )}

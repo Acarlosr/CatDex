@@ -36,11 +36,19 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 5173,
-    https: fs.existsSync(certPath) && fs.existsSync(keyPath)
-      ? {
-          cert: fs.readFileSync(certPath),
-          key: fs.readFileSync(keyPath),
-        }
-      : false,
+    https: readHttpsConfig(),
   },
 })
+
+// Certs live in the shared data volume and may be owned by the Docker
+// user; fall back to plain http instead of crashing the config load.
+function readHttpsConfig() {
+  try {
+    return {
+      cert: fs.readFileSync(certPath),
+      key: fs.readFileSync(keyPath),
+    }
+  } catch {
+    return false
+  }
+}

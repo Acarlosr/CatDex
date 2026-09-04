@@ -1,18 +1,107 @@
 @import "tailwindcss";
 
+/* ============================================================
+   ApexAlgo Design Tokens — see src/DESIGN.md for usage rules.
+   Use these via Tailwind utilities (bg-surface, text-muted, …)
+   instead of ad-hoc hex values.
+   ============================================================ */
+@theme {
+  /* Fonts */
+  --font-sans: "Inter Variable", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* Surface layers (darkest -> lightest) */
+  --color-bg: #080a0f;            /* app background */
+  --color-surface: #0e1118;       /* page-level panels */
+  --color-raised: #12151c;        /* cards, sidebar, headers */
+  --color-overlay: #171b24;       /* modals, dropdowns, popovers */
+  --color-inset: #05070b;         /* wells, inputs on raised surfaces */
+
+  /* Borders */
+  --color-border: #202532;        /* default / subtle */
+  --color-border-strong: #2b3545; /* hover / emphasized */
+
+  /* Text */
+  --color-text: #eaecef;          /* primary */
+  --color-text-secondary: #b7bdc6;
+  --color-muted: #848e9c;         /* labels, captions */
+  --color-faint: #5e6673;         /* least important */
+
+  /* Brand + semantic */
+  --color-accent: #fcd535;        /* gold — primary actions, focus */
+  --color-accent-hover: #e5c02a;
+  --color-accent-ink: #080a0f;    /* text on accent backgrounds */
+  --color-danger: #f6465d;
+  --color-danger-hover: #d93c51;
+  --color-success: #2ebd85;
+  --color-success-hover: #27a374;
+  --color-warn: #f0b90b;
+  --color-info: #0ea5e9;
+  --color-purple: #8b5cf6;
+
+  /* Radii */
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+
+  /* Shadows / glows */
+  --shadow-card: 0 4px 24px rgba(0, 0, 0, 0.3);
+  --shadow-pop: 0 12px 48px rgba(0, 0, 0, 0.55);
+  --shadow-glow-accent: 0 0 24px rgba(252, 213, 53, 0.18);
+  --shadow-glow-danger: 0 0 24px rgba(246, 70, 93, 0.18);
+  --shadow-glow-success: 0 0 24px rgba(46, 189, 133, 0.18);
+}
+
 .color-scheme-dark {
   color-scheme: dark;
 }
 
+html {
+  color-scheme: dark;
+}
+
 body {
-  @apply bg-[#080a0f] text-[#f1f3f5] m-0 p-0 font-sans;
+  @apply bg-bg text-text m-0 p-0 font-sans antialiased;
+  font-feature-settings: "cv02", "cv03", "cv11";
+}
+
+/* Selection */
+::selection {
+  background: rgba(252, 213, 53, 0.28);
+  color: #ffffff;
+}
+
+/* Numeric / price typography */
+.font-num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* Focus rings — keyboard only */
+:focus-visible {
+  outline: 2px solid rgba(252, 213, 53, 0.7);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline-offset: 0;
 }
 
 /* Custom Scrollbars for Pro Feel */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: #080a0f; }
-::-webkit-scrollbar-thumb { background: #202532; border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: #7d8598; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: #232937;
+  border-radius: 8px;
+  border: 2px solid #080a0f;
+}
+::-webkit-scrollbar-thumb:hover { background: #3a4356; }
+::-webkit-scrollbar-corner { background: transparent; }
+* { scrollbar-width: thin; scrollbar-color: #232937 transparent; }
 
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(5px); }
@@ -29,10 +118,10 @@ body {
 
 /* Bloomberg-style grid background */
 .grid-background {
-  background-color: #080a0f;
+  background-color: var(--color-bg);
   background-image:
-    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
   background-size: 40px 40px;
   background-position: center center;
 }
@@ -41,10 +130,10 @@ body {
 .page-container {
   position: relative;
   min-height: 100%;
-  background-color: #080a0f;
+  background-color: var(--color-bg);
   background-image:
-    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
   background-size: 40px 40px;
   background-position: center center;
 }
@@ -54,9 +143,9 @@ body {
   background: rgba(18, 21, 28, 0.9);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
-  border: 1px solid #202532;
-  border-radius: 0.75rem;
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
 }
 
 /* Staggered fade-in animations */
@@ -69,7 +158,50 @@ body {
 
 /* Modal entry animation */
 @keyframes modalIn {
-  from { opacity: 0; transform: scale(0.95) translateY(5px); }
+  from { opacity: 0; transform: scale(0.96) translateY(6px); }
   to { opacity: 1; transform: scale(1) translateY(0); }
 }
-.modal-enter { animation: modalIn 0.2s ease-out forwards; }
+.modal-enter { animation: modalIn 0.18s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+
+@keyframes backdropIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.backdrop-enter { animation: backdropIn 0.18s ease-out forwards; }
+
+/* Toast animations */
+@keyframes toastIn {
+  from { opacity: 0; transform: translateX(16px) scale(0.97); }
+  to { opacity: 1; transform: translateX(0) scale(1); }
+}
+@keyframes toastOut {
+  from { opacity: 1; transform: translateX(0) scale(1); }
+  to { opacity: 0; transform: translateX(16px) scale(0.97); }
+}
+.toast-enter { animation: toastIn 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+.toast-exit { animation: toastOut 0.18s ease-in forwards; }
+
+/* Skeleton shimmer */
+@keyframes skeletonPulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 0.9; }
+}
+.skeleton-pulse { animation: skeletonPulse 1.6s ease-in-out infinite; }
+
+/* Button loading spinner */
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { animation: spin 0.7s linear infinite; }
+
+/* Reduced motion: strip animation but keep end-state visible */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .fade-in-delay-1, .fade-in-delay-2, .fade-in-delay-3,
+  .fade-in-delay-4, .fade-in-delay-5, .fade-in-delay-6 {
+    opacity: 1;
+  }
+}

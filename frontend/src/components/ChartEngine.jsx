@@ -1,7 +1,9 @@
 import { useEffect, useState, useRef, useMemo, useCallback, memo } from 'react';
 import { createChart, CandlestickSeries, HistogramSeries, LineSeries, createSeriesMarkers } from 'lightweight-charts';
 import { apiClient } from '../api/client';
-import { INDICATOR_SCALE_MAP } from './Builder/indicatorConfig'; 
+import { INDICATOR_SCALE_MAP } from './Builder/indicatorConfig';
+import Button from './ui/Button';
+import Badge from './ui/Badge';
 
 const safeParseTime = (ts) => { 
   if (!ts) return null; 
@@ -24,7 +26,9 @@ const getTimeframeSeconds = (tf) => {
     return 60; 
 }; 
 
-const chartColors = ['#0ea5e9', '#fcd535', '#d946ef', '#2ebd85', '#f6465d', '#8b5cf6', '#ff9800', '#00bcd4']; 
+// Raw hex passed programmatically to lightweight-charts — first six mirror the
+// CSS tokens (info, accent, magenta, success, danger, purple); last two are extras
+const chartColors = ['#0ea5e9', '#fcd535', '#d946ef', '#2ebd85', '#f6465d', '#8b5cf6', '#ff9800', '#00bcd4'];
 const colorCache = {};
 let colorIdx = 0;
 const getColor = (str) => { 
@@ -68,7 +72,8 @@ function ChartEngine({ dataset }) {
   const [orders, setOrders] = useState([]);  
   const [positions, setPositions] = useState([]);  
    
-  const [showMenu, setShowMenu] = useState(false); 
+  const [retryTick, setRetryTick] = useState(0);
+  const [showMenu, setShowMenu] = useState(false);
   const [expandedMenuBot, setExpandedMenuBot] = useState(null);  
   const [botConfigs, setBotConfigs] = useState({}); 
 
@@ -274,6 +279,8 @@ function ChartEngine({ dataset }) {
         lastSignalIdRef.current = 0;
         const chart = createChart(chartContainerRef.current, {
           // --- APEXALGO DARK THEME ---
+          // Raw hex required by lightweight-charts; values mirror the CSS tokens
+          // (bg #080a0f, border #202532, muted-ish #7d8598)
           layout: { background: { type: 'solid', color: '#080a0f' }, textColor: '#7d8598' },
           grid: { vertLines: { color: '#202532' }, horzLines: { color: '#202532' } },
           crosshair: { mode: 0 },
@@ -288,6 +295,7 @@ function ChartEngine({ dataset }) {
         chartRef.current = chart;
 
         candleSeriesRef.current = chart.addSeries(CandlestickSeries, {
+          // Hex values mirror the success/danger CSS tokens
           upColor: '#2ebd85', downColor: '#f6465d', borderVisible: false, wickUpColor: '#2ebd85', wickDownColor: '#f6465d'
         });
 
@@ -340,7 +348,7 @@ function ChartEngine({ dataset }) {
       clearInterval(signalInterval);
       if (chartRef.current) { chartRef.current.remove(); chartRef.current = null; }
     };
-  }, [dataset.symbol, dataset.timeframe]); // eslint-disable-line react-hooks/exhaustive-deps -- chart init must only re-run on symbol/timeframe change
+  }, [dataset.symbol, dataset.timeframe, retryTick]); // eslint-disable-line react-hooks/exhaustive-deps -- chart init must only re-run on symbol/timeframe change or manual retry
 
   useEffect(() => {
     if (signals.length === 0) return; 
@@ -438,11 +446,12 @@ function ChartEngine({ dataset }) {
         const buyTrades = itemsAtTime.filter(i => i.type === 'trade' && i.data.side === 'buy'); 
         const sellTrades = itemsAtTime.filter(i => i.type === 'trade' && i.data.side === 'sell'); 
          
-        if (buySigs.length > 0) finalMarkers.push({ time: time, position: 'belowBar', color: '#2ebd85', shape: 'arrowUp', text: 'S-B' }); 
-        if (sellSigs.length > 0) finalMarkers.push({ time: time, position: 'aboveBar', color: '#f6465d', shape: 'arrowDown', text: 'S-S' }); 
-         
-        if (buyTrades.length > 0) finalMarkers.push({ time: time, position: 'belowBar', color: '#0ea5e9', shape: 'circle', text: 'T-BUY' }); 
-        if (sellTrades.length > 0) finalMarkers.push({ time: time, position: 'aboveBar', color: '#d946ef', shape: 'circle', text: 'T-SELL' }); 
+        // Marker hex values mirror the CSS tokens: success, danger, info, purple
+        if (buySigs.length > 0) finalMarkers.push({ time: time, position: 'belowBar', color: '#2ebd85', shape: 'arrowUp', text: 'S-B' });
+        if (sellSigs.length > 0) finalMarkers.push({ time: time, position: 'aboveBar', color: '#f6465d', shape: 'arrowDown', text: 'S-S' });
+
+        if (buyTrades.length > 0) finalMarkers.push({ time: time, position: 'belowBar', color: '#0ea5e9', shape: 'circle', text: 'T-BUY' });
+        if (sellTrades.length > 0) finalMarkers.push({ time: time, position: 'aboveBar', color: '#8b5cf6', shape: 'circle', text: 'T-SELL' });
     }); 
 
     finalMarkers.sort((a, b) => a.time - b.time); 
@@ -548,202 +557,231 @@ function ChartEngine({ dataset }) {
   if (!dataset || !dataset.symbol) return null;
 
   return (
-    <div className="flex flex-col w-full h-full bg-[#080a0f] rounded-none overflow-hidden"> 
-       
-      {/* 
-        FIX 1: pl-14 md:pl-20 zorgt dat de tekst ALTIJD opzij staat voor de hamburgerknop (zowel mobiel als desktop!)
-        Kleuren aangepast naar het strakke donkere thema
-      */}
-      <div className="h-14 bg-[#12151c]/80 backdrop-blur-xl border-b border-[#202532] flex items-center justify-between pl-14 md:pl-20 pr-4 md:pr-6 shrink-0 relative z-30"> 
-        <div className="flex items-center space-x-3 md:space-x-6"> 
-          <div className="flex flex-col"> 
-            <div className="flex items-center space-x-2"> 
-              <span className="text-white font-bold tracking-wider text-xs md:text-sm">{dataset.symbol}</span> 
-              <span className="bg-[#202532] text-[#f1f3f5] text-[9px] md:text-[10px] px-1.5 py-0.5 rounded uppercase font-bold tracking-widest">{dataset.timeframe}</span> 
-            </div> 
-            {marketInfo && <span className={`text-[10px] md:text-xs font-mono font-medium mt-0.5 ${marketInfo.change_24h >= 0 ? 'text-[#2ebd85]' : 'text-[#f6465d]'}`}>{formatNum(marketInfo.last)}</span>} 
-          </div> 
+    <div className="flex flex-col w-full h-full bg-bg rounded-none overflow-hidden">
 
-          {marketInfo && ( 
-            <> 
-              <div className="hidden md:flex flex-col border-l border-[#202532] pl-6"> 
-                <span className="text-[#7d8598] text-[10px] uppercase">24h Change</span> 
-                <span className={`text-xs font-mono mt-0.5 ${marketInfo.change_24h >= 0 ? 'text-[#2ebd85]' : 'text-[#f6465d]'}`}>{formatChange(marketInfo.change_24h)}</span> 
-              </div> 
-              <div className="hidden md:flex flex-col border-l border-[#202532] pl-6"> 
-                <span className="text-[#7d8598] text-[10px] uppercase">24h High</span> 
-                <span className="text-[#f1f3f5] text-xs font-mono mt-0.5">{formatNum(marketInfo.high_24h)}</span> 
-              </div> 
-              <div className="hidden lg:flex flex-col border-l border-[#202532] pl-6"> 
-                <span className="text-[#7d8598] text-[10px] uppercase">24h Low</span> 
-                <span className="text-[#f1f3f5] text-xs font-mono mt-0.5">{formatNum(marketInfo.low_24h)}</span> 
-              </div> 
-              <div className="hidden xl:flex flex-col border-l border-[#202532] pl-6"> 
-                <span className="text-[#7d8598] text-[10px] uppercase">24h Volume</span> 
-                <span className="text-[#f1f3f5] text-xs font-mono mt-0.5">{formatNum(marketInfo.vol_24h)}</span> 
-              </div> 
-            </> 
-          )} 
-        </div> 
+      {/* Toolbar — pl-14 md:pl-20 keeps the text clear of the hamburger button on all breakpoints */}
+      <div className="h-14 bg-raised/80 backdrop-blur-xl border-b border-border flex items-center justify-between pl-14 md:pl-20 pr-4 md:pr-6 shrink-0 relative z-30">
+        <div className="flex items-center space-x-3 md:space-x-6">
+          <div className="flex flex-col">
+            <div className="flex items-center space-x-2">
+              <span className="text-text font-bold tracking-wider text-xs md:text-sm font-num">{dataset.symbol}</span>
+              <span className="bg-overlay border border-border text-text text-[9px] md:text-[10px] px-1.5 py-0.5 rounded uppercase font-bold tracking-widest font-num">{dataset.timeframe}</span>
+            </div>
+            {marketInfo && <span className={`text-[10px] md:text-xs font-num font-medium mt-0.5 ${marketInfo.change_24h >= 0 ? 'text-success' : 'text-danger'}`}>{formatNum(marketInfo.last)}</span>}
+          </div>
 
-        <div className="flex items-center space-x-2 md:space-x-4 relative"> 
+          {marketInfo && (
+            <>
+              <div className="hidden md:flex flex-col border-l border-border pl-6">
+                <span className="text-muted text-[10px] uppercase">24h Change</span>
+                <span className={`text-xs font-num mt-0.5 ${marketInfo.change_24h >= 0 ? 'text-success' : 'text-danger'}`}>{formatChange(marketInfo.change_24h)}</span>
+              </div>
+              <div className="hidden md:flex flex-col border-l border-border pl-6">
+                <span className="text-muted text-[10px] uppercase">24h High</span>
+                <span className="text-text text-xs font-num mt-0.5">{formatNum(marketInfo.high_24h)}</span>
+              </div>
+              <div className="hidden lg:flex flex-col border-l border-border pl-6">
+                <span className="text-muted text-[10px] uppercase">24h Low</span>
+                <span className="text-text text-xs font-num mt-0.5">{formatNum(marketInfo.low_24h)}</span>
+              </div>
+              <div className="hidden xl:flex flex-col border-l border-border pl-6">
+                <span className="text-muted text-[10px] uppercase">24h Volume</span>
+                <span className="text-text text-xs font-num mt-0.5">{formatNum(marketInfo.vol_24h)}</span>
+              </div>
+            </>
+          )}
+        </div>
 
-          {/* whitespace-nowrap prevents the status label from wrapping on small screens */}
-          <div className={`flex items-center space-x-1.5 md:space-x-2 px-2 py-1 md:px-3 md:py-1.5 rounded text-[8px] md:text-xs font-bold tracking-widest border ${isLiveStreamActive ? 'bg-[#2ebd85]/10 text-[#2ebd85] border-[#2ebd85]/30' : 'bg-[#fcd535]/10 text-[#fcd535] border-[#fcd535]/30'}`}> 
-            <div className={`w-1.5 h-1.5 md:w-2 md:h-2 rounded-full ${isLiveStreamActive ? 'bg-[#2ebd85] animate-pulse' : 'bg-[#fcd535]'}`}></div> 
-            <span className="whitespace-nowrap">{isLiveStreamActive ? 'SYNCED: LIVE' : 'SYNCED: STATIC'}</span> 
-          </div> 
+        <div className="flex items-center space-x-2 md:space-x-4 relative">
 
-          <button onClick={() => setShowMenu(!showMenu)} className="p-1.5 rounded-lg bg-[#202532] hover:bg-[#2b3545] transition-all duration-200 border border-[#202532] flex items-center justify-center ml-1 md:ml-0"> 
-            <svg className="w-4 h-4 md:w-5 md:h-5 text-[#f1f3f5]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg> 
-          </button> 
+          <Badge variant={isLiveStreamActive ? 'success' : 'accent'} dot pulse={isLiveStreamActive}>
+            {isLiveStreamActive ? 'Synced: Live' : 'Synced: Static'}
+          </Badge>
 
-          {showMenu && ( 
-            <div className="absolute top-12 right-0 w-[calc(100vw-2rem)] sm:w-80 max-h-[70vh] overflow-y-auto custom-scrollbar bg-[#12151c]/95 backdrop-blur-xl border border-[#202532] rounded-xl shadow-[0_8px_40px_rgba(0,0,0,0.5)] py-2 z-50"> 
-              <div className="px-4 py-3 text-xs font-bold text-[#7d8598] uppercase border-b border-[#202532] mb-1">Algorithm Overlay</div> 
-              {Object.keys(botConfigs).length === 0 ? ( 
-                <div className="px-4 py-3 text-xs text-[#7d8598]">No algorithms active on this chart.</div> 
-              ) : ( 
-                Object.keys(botConfigs).map(botName => { 
-                  const config = botConfigs[botName]; 
-                  const isExpanded = expandedMenuBot === botName; 
+          <button
+            onClick={() => setShowMenu(!showMenu)}
+            aria-label="Algorithm overlay menu"
+            className="p-1.5 rounded-md bg-overlay hover:bg-border transition-all duration-200 border border-border hover:border-border-strong flex items-center justify-center ml-1 md:ml-0">
+            <svg className="w-4 h-4 md:w-5 md:h-5 text-text" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4 6h16M4 12h16M4 18h16" /></svg>
+          </button>
 
-                  return ( 
-                    <div key={botName} className="border-b border-[#202532]/50 last:border-0 transition-colors"> 
-                      <button onClick={() => toggleMenuBot(botName)} className="w-full px-4 py-3 flex items-center justify-between hover:bg-[#202532]/50 transition-colors"> 
-                        <div className="text-xs md:text-sm font-bold text-[#f1f3f5] flex items-center"> 
-                           <span className="w-1.5 h-1.5 rounded-full mr-2 bg-[#2ebd85]"></span>{botName} 
-                        </div> 
-                        <svg className={`w-4 h-4 text-[#7d8598] transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg> 
-                      </button> 
+          {showMenu && (
+            <div className="absolute top-12 right-0 w-[calc(100vw-2rem)] sm:w-80 max-h-[70vh] overflow-y-auto custom-scrollbar bg-overlay/95 backdrop-blur-xl border border-border rounded-lg shadow-pop py-2 z-50">
+              <div className="px-4 py-3 text-xs font-bold text-muted uppercase border-b border-border mb-1">Algorithm Overlay</div>
+              {Object.keys(botConfigs).length === 0 ? (
+                <div className="px-4 py-3 text-xs text-muted">No algorithms active on this chart.</div>
+              ) : (
+                Object.keys(botConfigs).map(botName => {
+                  const config = botConfigs[botName];
+                  const isExpanded = expandedMenuBot === botName;
 
-                      {isExpanded && ( 
-                        <div className="flex flex-col space-y-4 pl-6 md:pl-8 pr-4 pb-4 bg-[#080a0f]/50 border-l-2 border-[#202532] ml-4 mt-1"> 
-                            <div className="flex flex-col space-y-2 mt-2"> 
-                                <span className="text-[9px] md:text-[10px] font-bold text-[#0ea5e9] uppercase tracking-wider">LIVE & PAPER MODE</span> 
-                                <label className="flex items-center cursor-pointer"><input type="checkbox" className="form-checkbox h-3 w-3 text-[#0ea5e9] rounded border-[#202532] bg-[#080a0f]" checked={config.showRealTrades} onChange={() => toggleBotSetting(botName, 'showRealTrades')} /><span className="ml-2 text-xs text-[#f1f3f5]">Real Trades (T-B / T-S)</span></label> 
-                                <label className="flex items-center cursor-pointer"><input type="checkbox" className="form-checkbox h-3 w-3 text-[#0ea5e9] rounded border-[#202532] bg-[#080a0f]" checked={config.showRealPositions} onChange={() => toggleBotSetting(botName, 'showRealPositions')} /><span className="ml-2 text-xs text-[#f1f3f5]">Real Position Line</span></label> 
-                            </div> 
-                            <div className="flex flex-col space-y-2"> 
-                                <span className="text-[9px] md:text-[10px] font-bold text-[#fcd535] uppercase tracking-wider">BACKTEST MODE</span> 
-                                <label className="flex items-center cursor-pointer"><input type="checkbox" className="form-checkbox h-3 w-3 text-[#fcd535] rounded border-[#202532] bg-[#080a0f]" checked={config.showBacktestTrades} onChange={() => toggleBotSetting(botName, 'showBacktestTrades')} /><span className="ml-2 text-xs text-[#7d8598]">Historical Trades (T-B / T-S)</span></label> 
-                                <label className="flex items-center cursor-pointer"><input type="checkbox" className="form-checkbox h-3 w-3 text-[#fcd535] rounded border-[#202532] bg-[#080a0f]" checked={config.showBacktestPositions} onChange={() => toggleBotSetting(botName, 'showBacktestPositions')} /><span className="ml-2 text-xs text-[#7d8598]">Historical Position Line</span></label> 
-                            </div> 
-                            <div className="h-px bg-[#202532] w-full my-1"></div> 
-                            <label className="flex items-center cursor-pointer"><input type="checkbox" className="form-checkbox h-3.5 w-3.5 text-[#2ebd85] rounded border-[#202532] bg-[#080a0f]" checked={config.showSignals} onChange={() => toggleBotSetting(botName, 'showSignals')} /><span className="ml-2 text-xs text-[#f1f3f5] italic">Engine Thoughts (S-B / S-S)</span></label> 
-                            {Object.keys(config.indicators).map(indKey => ( 
-                                <label key={indKey} className="flex items-center cursor-pointer"><input type="checkbox" className="form-checkbox h-3.5 w-3.5 text-[#fcd535] rounded border-[#202532] bg-[#080a0f]" checked={config.indicators[indKey]} onChange={() => toggleIndicatorConfig(botName, indKey)} /><span className="ml-2 text-xs text-[#f1f3f5]">Draw Line: {indKey}</span></label> 
-                            ))} 
-                        </div> 
-                      )} 
-                    </div> 
-                  ); 
-                }) 
-              )} 
-            </div> 
-          )} 
-        </div> 
-      </div> 
+                  return (
+                    <div key={botName} className="border-b border-border/50 last:border-0 transition-colors">
+                      <button onClick={() => toggleMenuBot(botName)} className="w-full px-4 py-3 flex items-center justify-between hover:bg-border/50 transition-colors">
+                        <div className="text-xs md:text-sm font-bold text-text flex items-center">
+                           <span className="w-1.5 h-1.5 rounded-full mr-2 bg-success"></span>{botName}
+                        </div>
+                        <svg className={`w-4 h-4 text-muted transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M19 9l-7 7-7-7" /></svg>
+                      </button>
 
-      <div className="flex-1 relative w-full h-full"> 
-        {loading && <div className="absolute inset-0 flex items-center justify-center bg-[#080a0f]/90 backdrop-blur-sm z-20"><span className="text-[#fcd535] text-[10px] font-bold tracking-[0.3em] uppercase animate-pulse">Loading Engine...</span></div>} 
-        {errorMsg && <div className="absolute inset-0 flex items-center justify-center bg-[#080a0f]/90 z-20 text-[#f6465d] font-bold tracking-widest px-6 text-center">{errorMsg}</div>} 
-         
-        {hoverData && !loading && !errorMsg && ( 
-          <div className="absolute top-2 left-2 md:top-3 md:left-3 z-10 bg-[#12151c]/80 backdrop-blur-sm border border-[#202532] p-1.5 md:p-2 rounded-lg text-[9px] md:text-xs font-mono pointer-events-none shadow-lg max-w-[95%] md:max-w-[80%] flex flex-wrap gap-y-1 md:gap-y-2"> 
-            <div className="flex space-x-2 md:space-x-3 items-center flex-wrap gap-y-1 md:gap-y-2"> 
-              <div className="flex space-x-1"><span className="text-[#7d8598]">O</span><span className={hoverData.open > hoverData.close ? 'text-[#f6465d]' : 'text-[#2ebd85]'}>{formatNum(hoverData.open)}</span></div> 
-              <div className="flex space-x-1"><span className="text-[#7d8598]">H</span><span className="text-[#f1f3f5]">{formatNum(hoverData.high)}</span></div> 
-              <div className="flex space-x-1"><span className="text-[#7d8598]">L</span><span className="text-[#f1f3f5]">{formatNum(hoverData.low)}</span></div> 
-              <div className="flex space-x-1"><span className="text-[#7d8598]">C</span><span className={hoverData.close >= hoverData.open ? 'text-[#2ebd85]' : 'text-[#f6465d]'}>{formatNum(hoverData.close)}</span></div> 
-              <div className="flex space-x-1 border-l border-[#202532] pl-2 md:pl-3 ml-1"><span className="text-[#7d8598]">V</span><span className="text-[#f1f3f5]">{formatNum(hoverData.value)}</span></div> 
-               
-              {Object.keys(botConfigs).map(botName => { 
-                  const config = botConfigs[botName]; 
-                  const activeInds = Object.keys(config.indicators).filter(k => config.indicators[k]); 
-                  if (activeInds.length === 0 || !hoverData.time) return null; 
-                  const botDataAtTime = snappedSignalMap[hoverData.time]?.[botName]?.extra_data || {}; 
-                   
-                  return activeInds.map(indKey => { 
-                      const val = botDataAtTime[indKey]; 
-                      if (val === undefined) return null; 
-                      return ( 
-                          <div key={`${botName}-${indKey}`} className="flex space-x-1 border-l border-[#202532] pl-2 md:pl-3 ml-1 items-center"> 
-                              <span className="text-[#7d8598] text-[8px] md:text-[10px] uppercase">{indKey}</span><span className="text-[#fcd535]">{formatNum(val)}</span> 
-                          </div> 
-                      ); 
-                  }); 
-              })} 
-            </div> 
-          </div> 
-        )} 
+                      {isExpanded && (
+                        <div className="flex flex-col space-y-4 pl-6 md:pl-8 pr-4 pb-4 bg-bg/50 border-l-2 border-border ml-4 mt-1">
+                            <div className="flex flex-col space-y-2 mt-2">
+                                <span className="text-[9px] md:text-[10px] font-bold text-info uppercase tracking-wider">Live & Paper Mode</span>
+                                <label className="flex items-center cursor-pointer"><input type="checkbox" className="form-checkbox h-3 w-3 text-info rounded border-border bg-inset" checked={config.showRealTrades} onChange={() => toggleBotSetting(botName, 'showRealTrades')} /><span className="ml-2 text-xs text-text">Real Trades (T-B / T-S)</span></label>
+                                <label className="flex items-center cursor-pointer"><input type="checkbox" className="form-checkbox h-3 w-3 text-info rounded border-border bg-inset" checked={config.showRealPositions} onChange={() => toggleBotSetting(botName, 'showRealPositions')} /><span className="ml-2 text-xs text-text">Real Position Line</span></label>
+                            </div>
+                            <div className="flex flex-col space-y-2">
+                                <span className="text-[9px] md:text-[10px] font-bold text-accent uppercase tracking-wider">Backtest Mode</span>
+                                <label className="flex items-center cursor-pointer"><input type="checkbox" className="form-checkbox h-3 w-3 text-accent rounded border-border bg-inset" checked={config.showBacktestTrades} onChange={() => toggleBotSetting(botName, 'showBacktestTrades')} /><span className="ml-2 text-xs text-text-secondary">Historical Trades (T-B / T-S)</span></label>
+                                <label className="flex items-center cursor-pointer"><input type="checkbox" className="form-checkbox h-3 w-3 text-accent rounded border-border bg-inset" checked={config.showBacktestPositions} onChange={() => toggleBotSetting(botName, 'showBacktestPositions')} /><span className="ml-2 text-xs text-text-secondary">Historical Position Line</span></label>
+                            </div>
+                            <div className="h-px bg-border w-full my-1"></div>
+                            <label className="flex items-center cursor-pointer"><input type="checkbox" className="form-checkbox h-3.5 w-3.5 text-success rounded border-border bg-inset" checked={config.showSignals} onChange={() => toggleBotSetting(botName, 'showSignals')} /><span className="ml-2 text-xs text-text italic">Engine Thoughts (S-B / S-S)</span></label>
+                            {Object.keys(config.indicators).map(indKey => (
+                                <label key={indKey} className="flex items-center cursor-pointer"><input type="checkbox" className="form-checkbox h-3.5 w-3.5 text-accent rounded border-border bg-inset" checked={config.indicators[indKey]} onChange={() => toggleIndicatorConfig(botName, indKey)} /><span className="ml-2 text-xs text-text">Draw Line: <span className="font-num">{indKey}</span></span></label>
+                            ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          )}
+        </div>
+      </div>
 
-        {hoverData && snappedTradeMap[hoverData.time] && snappedTradeMap[hoverData.time].length > 0 && ( 
-          <div className="absolute top-12 left-2 md:top-14 md:left-3 z-20 flex flex-col space-y-2 pointer-events-none max-w-[calc(100vw-1rem)] md:max-w-none"> 
-            {snappedTradeMap[hoverData.time].map((trade, idx) => { 
-                const totalValue = trade.price * trade.amount; 
-                const isWin = trade.position ? trade.price >= trade.position.entry_price : true; 
-                const pnlPct = trade.position ? (((trade.price - trade.position.entry_price) / trade.position.entry_price) * 100).toFixed(2) : "0.00"; 
-                const pnlAbs = trade.position ? ((trade.price - trade.position.entry_price) * trade.amount).toFixed(2) : "0.00"; 
+      <div className="flex-1 relative w-full h-full">
+        {loading && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-bg/90 backdrop-blur-sm z-20">
+            <svg className="spin w-6 h-6 text-accent" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <circle cx="12" cy="12" r="10" stroke="currentColor" strokeOpacity="0.25" strokeWidth="3" />
+              <path d="M22 12a10 10 0 0 0-10-10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+            </svg>
+            <span className="text-muted text-[10px] font-bold tracking-[0.3em] uppercase">Loading candles…</span>
+          </div>
+        )}
+        {errorMsg && !loading && (
+          <div className="absolute inset-0 flex items-center justify-center bg-bg/90 z-20 px-6">
+            <div className="terminal-card p-6 max-w-sm w-full text-center space-y-4">
+              <div className="w-12 h-12 mx-auto rounded-lg bg-danger/10 border border-danger/30 flex items-center justify-center text-danger">
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 8v4m0 4h.01M12 3l9 16H3l9-16z" /></svg>
+              </div>
+              <div>
+                <h3 className="text-sm font-semibold text-text mb-1">Chart failed to load</h3>
+                <p className="text-xs text-muted leading-relaxed">{errorMsg}</p>
+              </div>
+              <Button variant="secondary" size="sm" onClick={() => setRetryTick(t => t + 1)}>Retry</Button>
+            </div>
+          </div>
+        )}
 
-                return ( 
-                    <div key={idx} className={`bg-[#12151c]/95 backdrop-blur-md border p-3 rounded-lg shadow-2xl flex flex-col min-w-[240px] md:min-w-[260px] ${trade.side === 'buy' ? 'border-[#0ea5e9]' : 'border-[#d946ef]'}`}> 
-                        <div className="flex justify-between items-center mb-2 pb-2 border-b border-[#202532]"> 
-                            <span className={`text-[10px] md:text-xs font-bold uppercase tracking-wider ${trade.side === 'buy' ? 'text-[#0ea5e9]' : 'text-[#d946ef]'}`}> 
-                                {trade.side === 'buy' ? 'ENTRY EXECUTION' : 'EXIT EXECUTION'} 
-                            </span> 
-                            <span className="bg-[#202532] text-[#f1f3f5] text-[8px] px-1.5 py-0.5 rounded uppercase font-bold">{trade.mode}</span> 
-                        </div> 
-                        <div className="grid grid-cols-2 gap-y-3 gap-x-4"> 
-                            <div className="flex flex-col"> 
-                                <span className="text-[8px] md:text-[9px] text-[#7d8598] uppercase font-bold">Price</span> 
-                                <span className="text-[10px] md:text-xs text-[#f1f3f5] font-mono">${formatNum(trade.price)}</span> 
-                            </div> 
-                            <div className="flex flex-col text-right"> 
-                                <span className="text-[8px] md:text-[9px] text-[#7d8598] uppercase font-bold">Size</span> 
-                                <span className="text-[10px] md:text-xs text-[#f1f3f5] font-mono">{formatCrypto(trade.amount)}</span> 
-                            </div> 
-                             
-                            <div className="flex flex-col"> 
-                                <span className="text-[8px] md:text-[9px] text-[#7d8598] uppercase font-bold">Total</span> 
-                                <span className="text-[10px] md:text-xs text-[#f1f3f5] font-mono">${formatNum(totalValue)}</span> 
-                            </div> 
-                            <div className="flex flex-col text-right"> 
-                                <span className="text-[8px] md:text-[9px] text-[#7d8598] uppercase font-bold">Type</span> 
-                                <span className="text-[10px] md:text-xs text-[#f1f3f5] uppercase">{trade.order_type || 'Market'}</span> 
-                            </div> 
-                             
-                            {trade.side === 'sell' && trade.position && ( 
-                                <div className="flex flex-col col-span-2 pt-2 border-t border-[#202532]"> 
-                                    <span className="text-[8px] md:text-[9px] text-[#7d8598] uppercase font-bold mb-1">PnL</span> 
-                                    <div className="grid grid-cols-2 gap-2 bg-[#080a0f] p-2 rounded-lg border border-[#202532]"> 
-                                        <div className="flex flex-col"> 
-                                            <span className="text-[8px] text-[#7d8598] uppercase">Avg Entry</span> 
-                                            <span className="text-[9px] md:text-[10px] text-[#f1f3f5] font-mono">${formatNum(trade.position.entry_price)}</span> 
-                                        </div> 
-                                        <div className="flex flex-col text-right"> 
-                                            <span className="text-[8px] text-[#7d8598] uppercase">Realized</span> 
-                                            <span className={`text-[9px] md:text-[10px] font-mono font-bold ${isWin ? 'text-[#2ebd85]' : 'text-[#f6465d]'}`}> 
-                                                {isWin ? '+' : ''}${pnlAbs} ({pnlPct}%) 
-                                            </span> 
-                                        </div> 
-                                    </div> 
-                                </div> 
-                            )} 
+        {hoverData && !loading && !errorMsg && (
+          <div className="absolute top-2 left-2 md:top-3 md:left-3 z-10 bg-raised/80 backdrop-blur-sm border border-border p-1.5 md:p-2 rounded-lg text-[9px] md:text-xs font-num pointer-events-none shadow-card max-w-[95%] md:max-w-[80%] flex flex-wrap gap-y-1 md:gap-y-2">
+            <div className="flex space-x-2 md:space-x-3 items-center flex-wrap gap-y-1 md:gap-y-2">
+              <div className="flex space-x-1"><span className="text-muted">O</span><span className={hoverData.open > hoverData.close ? 'text-danger' : 'text-success'}>{formatNum(hoverData.open)}</span></div>
+              <div className="flex space-x-1"><span className="text-muted">H</span><span className="text-text">{formatNum(hoverData.high)}</span></div>
+              <div className="flex space-x-1"><span className="text-muted">L</span><span className="text-text">{formatNum(hoverData.low)}</span></div>
+              <div className="flex space-x-1"><span className="text-muted">C</span><span className={hoverData.close >= hoverData.open ? 'text-success' : 'text-danger'}>{formatNum(hoverData.close)}</span></div>
+              <div className="flex space-x-1 border-l border-border pl-2 md:pl-3 ml-1"><span className="text-muted">V</span><span className="text-text">{formatNum(hoverData.value)}</span></div>
 
-                            <div className="flex flex-col col-span-2 pt-2 border-t border-[#202532]"> 
-                                <span className="text-[8px] md:text-[9px] text-[#7d8598] uppercase font-bold">Source</span> 
-                                <span className="text-[10px] md:text-xs text-[#fcd535] truncate">{trade.bot_name}</span> 
-                            </div> 
-                        </div> 
-                    </div> 
-                ) 
-            })} 
-          </div> 
-        )} 
+              {Object.keys(botConfigs).map(botName => {
+                  const config = botConfigs[botName];
+                  const activeInds = Object.keys(config.indicators).filter(k => config.indicators[k]);
+                  if (activeInds.length === 0 || !hoverData.time) return null;
+                  const botDataAtTime = snappedSignalMap[hoverData.time]?.[botName]?.extra_data || {};
 
-        <div ref={chartContainerRef} className="absolute inset-0 z-0" /> 
-      </div> 
+                  return activeInds.map(indKey => {
+                      const val = botDataAtTime[indKey];
+                      if (val === undefined) return null;
+                      return (
+                          <div key={`${botName}-${indKey}`} className="flex space-x-1 border-l border-border pl-2 md:pl-3 ml-1 items-center">
+                              <span className="text-muted text-[8px] md:text-[10px] uppercase">{indKey}</span><span className="text-accent">{formatNum(val)}</span>
+                          </div>
+                      );
+                  });
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Signal-marker legend */}
+        {!loading && !errorMsg && (
+          <div className="absolute top-2 right-2 md:top-3 md:right-3 z-10 hidden sm:flex items-center gap-3 bg-raised/80 backdrop-blur-sm border border-border px-2.5 py-1.5 rounded-lg pointer-events-none">
+            <span className="flex items-center gap-1 text-[8px] font-bold uppercase tracking-wider text-muted"><span className="text-success text-[10px] leading-none">▲</span> S-B</span>
+            <span className="flex items-center gap-1 text-[8px] font-bold uppercase tracking-wider text-muted"><span className="text-danger text-[10px] leading-none">▼</span> S-S</span>
+            <span className="flex items-center gap-1 text-[8px] font-bold uppercase tracking-wider text-muted"><span className="w-1.5 h-1.5 rounded-full bg-info" /> T-Buy</span>
+            <span className="flex items-center gap-1 text-[8px] font-bold uppercase tracking-wider text-muted"><span className="w-1.5 h-1.5 rounded-full bg-purple" /> T-Sell</span>
+          </div>
+        )}
+
+        {hoverData && snappedTradeMap[hoverData.time] && snappedTradeMap[hoverData.time].length > 0 && (
+          <div className="absolute top-12 left-2 md:top-14 md:left-3 z-20 flex flex-col space-y-2 pointer-events-none max-w-[calc(100vw-1rem)] md:max-w-none">
+            {snappedTradeMap[hoverData.time].map((trade, idx) => {
+                const totalValue = trade.price * trade.amount;
+                const isWin = trade.position ? trade.price >= trade.position.entry_price : true;
+                const pnlPct = trade.position ? (((trade.price - trade.position.entry_price) / trade.position.entry_price) * 100).toFixed(2) : "0.00";
+                const pnlAbs = trade.position ? ((trade.price - trade.position.entry_price) * trade.amount).toFixed(2) : "0.00";
+
+                return (
+                    <div key={idx} className={`bg-raised/95 backdrop-blur-md border p-3 rounded-lg shadow-pop flex flex-col min-w-[240px] md:min-w-[260px] ${trade.side === 'buy' ? 'border-info' : 'border-purple'}`}>
+                        <div className="flex justify-between items-center mb-2 pb-2 border-b border-border">
+                            <span className={`text-[10px] md:text-xs font-bold uppercase tracking-wider ${trade.side === 'buy' ? 'text-info' : 'text-purple'}`}>
+                                {trade.side === 'buy' ? 'ENTRY EXECUTION' : 'EXIT EXECUTION'}
+                            </span>
+                            <span className="bg-overlay border border-border text-text text-[8px] px-1.5 py-0.5 rounded uppercase font-bold">{trade.mode}</span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-y-3 gap-x-4">
+                            <div className="flex flex-col">
+                                <span className="text-[8px] md:text-[9px] text-muted uppercase font-bold">Price</span>
+                                <span className="text-[10px] md:text-xs text-text font-num">${formatNum(trade.price)}</span>
+                            </div>
+                            <div className="flex flex-col text-right">
+                                <span className="text-[8px] md:text-[9px] text-muted uppercase font-bold">Size</span>
+                                <span className="text-[10px] md:text-xs text-text font-num">{formatCrypto(trade.amount)}</span>
+                            </div>
+
+                            <div className="flex flex-col">
+                                <span className="text-[8px] md:text-[9px] text-muted uppercase font-bold">Total</span>
+                                <span className="text-[10px] md:text-xs text-text font-num">${formatNum(totalValue)}</span>
+                            </div>
+                            <div className="flex flex-col text-right">
+                                <span className="text-[8px] md:text-[9px] text-muted uppercase font-bold">Type</span>
+                                <span className="text-[10px] md:text-xs text-text uppercase">{trade.order_type || 'Market'}</span>
+                            </div>
+
+                            {trade.side === 'sell' && trade.position && (
+                                <div className="flex flex-col col-span-2 pt-2 border-t border-border">
+                                    <span className="text-[8px] md:text-[9px] text-muted uppercase font-bold mb-1">PnL</span>
+                                    <div className="grid grid-cols-2 gap-2 bg-inset p-2 rounded-lg border border-border">
+                                        <div className="flex flex-col">
+                                            <span className="text-[8px] text-muted uppercase">Avg Entry</span>
+                                            <span className="text-[9px] md:text-[10px] text-text font-num">${formatNum(trade.position.entry_price)}</span>
+                                        </div>
+                                        <div className="flex flex-col text-right">
+                                            <span className="text-[8px] text-muted uppercase">Realized</span>
+                                            <span className={`text-[9px] md:text-[10px] font-num font-bold ${isWin ? 'text-success' : 'text-danger'}`}>
+                                                {isWin ? '+' : ''}${pnlAbs} ({pnlPct}%)
+                                            </span>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            <div className="flex flex-col col-span-2 pt-2 border-t border-border">
+                                <span className="text-[8px] md:text-[9px] text-muted uppercase font-bold">Source</span>
+                                <span className="text-[10px] md:text-xs text-accent truncate">{trade.bot_name}</span>
+                            </div>
+                        </div>
+                    </div>
+                )
+            })}
+          </div>
+        )}
+
+        <div ref={chartContainerRef} className="absolute inset-0 z-0" />
+      </div>
     </div>
   );
 }

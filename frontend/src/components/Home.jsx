@@ -1,86 +1,196 @@
-import { useEffect, useState } from 'react';
-import { apiClient } from '../api/client';
+import Badge from './ui/Badge';
+import Button from './ui/Button';
+import EmptyState from './ui/EmptyState';
 
-export default function Home({ setActiveView }) {
-    const [stats, setStats] = useState({ bots: 0, positions: 0, balance: 0 });
+/**
+ * Home — dashboard landing screen.
+ * Receives the already-polled bots summary from App (no extra fetching).
+ *
+ * @param {Function} setActiveView  Navigate to a view key.
+ * @param {Array} bots              /api/bots/summary payload.
+ */
 
-    useEffect(() => {
-        const pingStats = async () => {
-            try {
-                const botRes = await apiClient.get('/api/bots/');
-                const posRes = await apiClient.get('/api/trades/positions');
-                setStats({
-                    bots: botRes.data.length,
-                    positions: posRes.data.filter(p => p.status === 'open').length,
-                    balance: 1000 
-                });
-            } catch { /* silent */ }
-        };
-        pingStats();
-    }, []);
+const openBuilder = (bot) =>
+  window.dispatchEvent(new CustomEvent('open-builder', bot ? { detail: bot } : undefined));
 
-    return (
-        <div className="w-full min-h-full flex flex-col items-center justify-start md:justify-center relative overflow-y-auto overflow-x-hidden custom-scrollbar bg-[#080a0f] grid-background p-6 pt-24 md:pt-6">
-            
-            {/* Ambient glow */}
-            <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-[#fcd535]/5 rounded-full blur-[120px] pointer-events-none"></div>
-            
-            <div className="z-10 flex flex-col items-center text-center fade-in max-w-4xl w-full">
-                
-                <div className="mb-10 p-8 rounded-2xl bg-[#12151c]/90 backdrop-blur-xl border border-[#202532] glow-panel w-full sm:w-auto shadow-2xl">
-                    <h1 className="text-5xl sm:text-6xl md:text-7xl font-extrabold tracking-widest text-white drop-shadow-lg mb-3">
-                        APEX<span className="text-[#fcd535]">ALGO</span>
-                    </h1>
-                    <p className="text-[#0ea5e9] text-[10px] sm:text-xs md:text-sm font-mono tracking-[0.25em] uppercase">Quantitative Trading Engine v0.1.0-alpha.1</p>
-                </div>
+const StatTile = ({ label, value, sub, accent, icon, onClick, delay }) => (
+  <button
+    onClick={onClick}
+    className={`terminal-card relative text-left p-5 group transition-all duration-300 hover:border-border-strong hover:-translate-y-0.5 overflow-hidden fade-in-delay-${delay}`}
+  >
+    <div
+      className="pointer-events-none absolute -top-10 -right-10 w-28 h-28 rounded-full blur-3xl opacity-[0.08] group-hover:opacity-[0.14] transition-opacity duration-300"
+      style={{ background: accent }}
+    />
+    <div className="flex items-start justify-between mb-4">
+      <span
+        className="w-9 h-9 rounded-md border flex items-center justify-center transition-transform duration-300 group-hover:scale-105"
+        style={{ color: accent, borderColor: `${accent}40`, background: `${accent}10` }}
+      >
+        {icon}
+      </span>
+      <svg className="w-3.5 h-3.5 text-faint opacity-0 group-hover:opacity-100 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+      </svg>
+    </div>
+    <p className="text-2xl font-num font-bold text-white leading-none mb-1.5">{value}</p>
+    <p className="text-[10px] font-bold uppercase tracking-widest text-muted">{label}</p>
+    {sub && <p className="text-[10px] text-faint mt-1">{sub}</p>}
+  </button>
+);
 
-                <p className="text-[#7d8598] text-sm sm:text-base md:text-lg mb-12 max-w-2xl leading-relaxed px-4">
-                    Deploy institutional-grade trading algorithms in seconds. Visual architecture, local high-frequency backtesting, and direct API execution.
-                </p>
+export default function Home({ setActiveView, bots = [] }) {
+  const activeBots = bots.filter((b) => b.is_active);
+  const liveBots = bots.filter((b) => b.settings?.api_execution);
+  const recentBots = [...bots]
+    .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
+    .slice(0, 5);
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6 w-full mb-12 px-4">
-                    <div className="bg-[#12151c] border border-[#202532] p-8 rounded-xl text-center hover:border-[#2ebd85] transition-colors group cursor-pointer shadow-lg" onClick={() => setActiveView('bots')}>
-                        <div className="text-[#2ebd85] mb-4"><svg className="w-8 h-8 mx-auto group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" /></svg></div>
-                        <h3 className="text-3xl font-mono font-bold text-white mb-2">{stats.bots}</h3>
-                        <span className="text-[10px] text-[#7d8598] uppercase tracking-widest font-bold">Algorithms Loaded</span>
-                    </div>
+  return (
+    <div className="w-full min-h-full relative overflow-y-auto overflow-x-hidden bg-bg grid-background">
+      {/* Ambient glows */}
+      <div className="absolute top-0 left-1/3 w-[500px] h-[500px] bg-accent/[0.04] rounded-full blur-[130px] pointer-events-none" />
+      <div className="absolute bottom-0 right-0 w-[400px] h-[400px] bg-info/[0.04] rounded-full blur-[130px] pointer-events-none" />
 
-                    <div className="bg-[#12151c] border border-[#202532] p-8 rounded-xl text-center hover:border-[#0ea5e9] transition-colors group cursor-pointer shadow-lg" onClick={() => setActiveView('trades')}>
-                        <div className="text-[#0ea5e9] mb-4"><svg className="w-8 h-8 mx-auto group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg></div>
-                        <h3 className="text-3xl font-mono font-bold text-white mb-2">{stats.positions}</h3>
-                        <span className="text-[10px] text-[#7d8598] uppercase tracking-widest font-bold">Active Open Trades</span>
-                    </div>
+      <div className="relative z-10 max-w-5xl mx-auto px-5 md:px-8 pt-20 md:pt-14 pb-10">
 
-                    <div className="bg-[#12151c] border border-[#202532] p-8 rounded-xl text-center hover:border-[#fcd535] transition-colors group cursor-pointer shadow-lg" onClick={() => window.dispatchEvent(new CustomEvent('open-builder'))}>
-                        <div className="text-[#fcd535] mb-4"><svg className="w-8 h-8 mx-auto group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" /></svg></div>
-                        <h3 className="text-2xl font-mono font-bold text-white mb-2 pt-1">Visual</h3>
-                        <span className="text-[10px] text-[#7d8598] uppercase tracking-widest font-bold">Strategy Builder</span>
-                    </div>
-                </div>
+        {/* Hero */}
+        <header className="mb-10 fade-in">
+          <div className="flex items-center gap-2 mb-4">
+            <Badge variant="success" dot pulse>Engine online</Badge>
+            {activeBots.length > 0 && (
+              <Badge variant="accent">{activeBots.length} running</Badge>
+            )}
+          </div>
+          <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight text-white mb-3">
+            Apex<span className="text-accent">Algo</span>
+            <span className="ml-3 align-middle text-[10px] font-num font-medium text-faint tracking-[0.25em] uppercase">v0.1.0-alpha</span>
+          </h1>
+          <p className="text-muted text-sm md:text-base max-w-2xl leading-relaxed">
+            Self-hosted quantitative trading terminal. Design strategies visually,
+            backtest locally against real market data, and deploy to live exchanges.
+          </p>
+          <div className="flex flex-wrap gap-3 mt-6">
+            <Button size="lg" onClick={() => openBuilder()}>
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+              New Strategy
+            </Button>
+            <Button size="lg" variant="secondary" onClick={() => setActiveView('manager')}>
+              Data Vault
+            </Button>
+            <Button size="lg" variant="ghost" onClick={() => setActiveView('settings')}>
+              Connect Exchange
+            </Button>
+          </div>
+        </header>
 
-                <div className="flex flex-col md:flex-row gap-4 w-full md:w-auto px-4 mt-2">
-                    <button 
-                        onClick={() => window.dispatchEvent(new CustomEvent('open-builder'))}
-                        className="px-10 py-4 bg-[#fcd535] text-[#080a0f] font-bold text-xs uppercase tracking-widest rounded-lg shadow-[0_0_15px_rgba(252,213,53,0.15)] hover:shadow-[0_0_25px_rgba(252,213,53,0.3)] hover:bg-[#e5c02a] transition-all w-full md:w-auto"
-                    >
-                        Launch Architecture
-                    </button>
-                    <button 
-                        onClick={() => setActiveView('manager')}
-                        className="px-10 py-4 bg-[#12151c] border border-[#202532] text-[#f1f3f5] font-bold text-xs uppercase tracking-widest rounded-lg hover:border-[#7d8598] transition-colors w-full md:w-auto"
-                    >
-                        Enter Data Vault
-                    </button>
-                </div>
-
-            </div>
-
-            <div className="absolute bottom-6 left-6 text-[9px] font-mono text-[#7d8598] opacity-60 hidden md:block leading-relaxed tracking-widest">
-                <p>&gt; ENGINE_CORE: ONLINE</p>
-                <p>&gt; WS_STREAM: CONNECTED</p>
-                <p>&gt; DB_STATUS: SYNCHRONIZED</p>
-                <p className="text-[#2ebd85] animate-pulse mt-1">&gt; WAITING FOR ALGO DEPLOYMENT...</p>
-            </div>
+        {/* Stat tiles */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-10">
+          <StatTile
+            delay={1}
+            label="Total algorithms"
+            value={bots.length}
+            accent="#fcd535"
+            onClick={() => setActiveView('bots')}
+            icon={<svg className="w-4.5 h-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>}
+          />
+          <StatTile
+            delay={2}
+            label="Running now"
+            value={activeBots.length}
+            sub={activeBots.length ? 'evaluating on candle close' : 'all engines idle'}
+            accent="#2ebd85"
+            onClick={() => setActiveView('bots')}
+            icon={<svg className="w-4.5 h-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>}
+          />
+          <StatTile
+            delay={3}
+            label="Live execution"
+            value={liveBots.length}
+            sub={liveBots.length ? 'trading with real funds' : 'paper / backtest only'}
+            accent="#f6465d"
+            onClick={() => setActiveView('bots')}
+            icon={<svg className="w-4.5 h-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>}
+          />
+          <StatTile
+            delay={4}
+            label="Analytics"
+            value="P&L"
+            sub="equity curve & drawdown"
+            accent="#0ea5e9"
+            onClick={() => setActiveView('trades')}
+            icon={<svg className="w-4.5 h-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>}
+          />
         </div>
-    );
+
+        {/* Recent strategies */}
+        <section className="fade-in-delay-5">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-xs font-bold uppercase tracking-[0.2em] text-muted">Recent strategies</h2>
+            {bots.length > 0 && (
+              <Button variant="ghost" size="sm" onClick={() => setActiveView('bots')}>
+                View all
+              </Button>
+            )}
+          </div>
+
+          <div className="terminal-card overflow-hidden">
+            {recentBots.length === 0 ? (
+              <EmptyState
+                title="No strategies yet"
+                description="Build your first algorithm in the visual editor — drag indicators, conditions and actions onto the canvas."
+                action={<Button size="sm" onClick={() => openBuilder()}>Open builder</Button>}
+              />
+            ) : (
+              <ul className="divide-y divide-border/50">
+                {recentBots.map((bot) => {
+                  const symbols = bot.settings?.symbols?.length
+                    ? bot.settings.symbols
+                    : bot.settings?.symbol ? [bot.settings.symbol] : [];
+                  return (
+                    <li key={bot.id}>
+                      <button
+                        onClick={() => openBuilder(bot)}
+                        className="w-full flex items-center gap-4 px-5 py-3.5 text-left hover:bg-white/[0.02] transition-colors group"
+                      >
+                        <span className={`w-2 h-2 rounded-full shrink-0 ${bot.is_active ? 'bg-success shadow-[0_0_8px_#2ebd85] animate-pulse' : 'bg-faint/40'}`} />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-semibold text-text truncate group-hover:text-white transition-colors">{bot.name}</p>
+                          <p className="text-[10px] text-faint font-num truncate mt-0.5">
+                            {symbols.slice(0, 3).join(' · ') || 'no pairs'}
+                            {symbols.length > 3 && ` +${symbols.length - 3}`}
+                            {bot.settings?.timeframe && `  ·  ${bot.settings.timeframe}`}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          {bot.settings?.api_execution
+                            ? <Badge variant="danger">Live</Badge>
+                            : <Badge variant="neutral">Sim</Badge>}
+                          {bot.is_active
+                            ? <Badge variant="success" dot pulse>Running</Badge>
+                            : <Badge variant="neutral">Stopped</Badge>}
+                        </div>
+                        <svg className="w-3.5 h-3.5 text-faint opacity-0 group-hover:opacity-100 transition-opacity shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                        </svg>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        </section>
+
+        {/* Footer status line */}
+        <div className="mt-10 flex items-center gap-6 text-[9px] font-num text-faint uppercase tracking-widest fade-in-delay-6">
+          <span className="flex items-center gap-1.5"><span className="w-1 h-1 rounded-full bg-success" /> Engine core</span>
+          <span className="flex items-center gap-1.5"><span className="w-1 h-1 rounded-full bg-success" /> Database</span>
+          <span className="flex items-center gap-1.5"><span className="w-1 h-1 rounded-full bg-info" /> Candle poller</span>
+        </div>
+      </div>
+    </div>
+  );
 }

@@ -3,10 +3,59 @@ import { apiClient } from '../api/client';
 import PageShell from './ui/PageShell';
 import GlowPanel from './ui/GlowPanel';
 import SectionHeader from './ui/SectionHeader';
-import Modal from './ui/Modal';
+import Button from './ui/Button';
+import Badge from './ui/Badge';
+import EmptyState from './ui/EmptyState';
+import { Input, Select } from './ui/Input';
+import { SkeletonCard } from './ui/Skeleton';
+import { toast } from './ui/Toast';
+import { confirmDialog } from './ui/ConfirmDialog';
 
-export default function Settings({ setError }) {
+const EXCHANGES = [
+  { id: 'okx', name: 'OKX' },
+  { id: 'binance', name: 'Binance' },
+  { id: 'bitvavo', name: 'Bitvavo' },
+  { id: 'coinbase', name: 'Coinbase' },
+  { id: 'cryptocom', name: 'Crypto.com' },
+  { id: 'kraken', name: 'Kraken' },
+  { id: 'kucoin', name: 'KuCoin' },
+];
+
+const EXCHANGE_NAMES = Object.fromEntries(EXCHANGES.map(ex => [ex.id, ex.name]));
+
+/* Deterministic avatar color per exchange (token values) */
+const AVATAR_COLORS = {
+  okx: 'text-info border-info/30 bg-info/10',
+  binance: 'text-accent border-accent/30 bg-accent/10',
+  bitvavo: 'text-success border-success/30 bg-success/10',
+  coinbase: 'text-info border-info/30 bg-info/10',
+  cryptocom: 'text-purple border-purple/30 bg-purple/10',
+  kraken: 'text-purple border-purple/30 bg-purple/10',
+  kucoin: 'text-success border-success/30 bg-success/10',
+};
+
+const IconKeyEmpty = (
+  <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5} aria-hidden="true">
+    <path strokeLinecap="round" strokeLinejoin="round" d="M15 7a4 4 0 11-4 4c0-.35.04-.7.13-1.03L4 17v3h3l1-1v-2h2v-2h2l1.87-1.87c.33.09.68.13 1.13.13a4 4 0 000-8z" />
+    <circle cx="16" cy="8" r="1" fill="currentColor" stroke="none" />
+  </svg>
+);
+
+function ExchangeAvatar({ exchange }) {
+  const initial = (EXCHANGE_NAMES[exchange] || exchange || '?').charAt(0).toUpperCase();
+  return (
+    <div
+      className={`w-9 h-9 rounded-lg border flex items-center justify-center font-bold text-sm shrink-0 ${AVATAR_COLORS[exchange] || 'text-muted border-border bg-raised'}`}
+      aria-hidden="true"
+    >
+      {initial}
+    </div>
+  );
+}
+
+export default function Settings() {
   const [keys, setKeys] = useState([]);
+  const [initialLoading, setInitialLoading] = useState(true);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [deletingKey, setDeletingKey] = useState(null);
@@ -21,18 +70,7 @@ export default function Settings({ setError }) {
   const [passphrase, setPassphrase] = useState('');
   const [isSandbox, setIsSandbox] = useState(true);
 
-  const EXCHANGES = [
-    { id: 'okx', name: 'OKX' },
-    { id: 'binance', name: 'Binance' },
-    { id: 'bitvavo', name: 'Bitvavo' },
-    { id: 'coinbase', name: 'Coinbase' },
-    { id: 'cryptocom', name: 'Crypto.com' },
-    { id: 'kraken', name: 'Kraken' },
-    { id: 'kucoin', name: 'KuCoin' },
-  ];
   const needsPassphrase = ['okx', 'kucoin'].includes(selectedExchange);
-
-  const [modalConfig, setModalConfig] = useState(null);
 
   const [swapModal, setSwapModal] = useState(null);
   const [swapFrom, setSwapFrom] = useState('USDC');
@@ -45,12 +83,12 @@ export default function Settings({ setError }) {
     try {
       const response = await apiClient.get('/api/keys');
       setKeys(Array.isArray(response.data) ? response.data : []);
-      if (setError) setError(null);
     } catch (err) {
-      if (setError) setError(err.response?.data?.detail || err.message);
+      toast.error(err.response?.data?.detail || err.message);
     }
     setRefreshing(false);
-  }, [setError]);
+    setInitialLoading(false);
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -61,7 +99,6 @@ export default function Settings({ setError }) {
   const handleSave = async (e) => {
     e.preventDefault();
     setLoading(true);
-    if (setError) setError(null);
     try {
       await apiClient.post('/api/keys', {
         name: keyName,
@@ -71,25 +108,26 @@ export default function Settings({ setError }) {
         passphrase: needsPassphrase ? passphrase : '',
         is_sandbox: isSandbox
       });
-      setModalConfig({
-        type: 'success',
-        title: 'Connection Saved',
-        message: `Success! Key '${keyName}' is verified and securely stored.`,
-        confirmText: 'OK',
-        onConfirm: () => setModalConfig(null)
-      });
+      toast.success(`Key '${keyName}' verified and securely stored.`);
       setKeyName('');
       setApiKey('');
       setApiSecret('');
       setPassphrase('');
       fetchKeys();
     } catch (err) {
-      if (setError) setError(err.response?.data?.detail || "An unexpected error occurred.");
+      toast.error(err.response?.data?.detail || 'An unexpected error occurred.');
     }
     setLoading(false);
   };
 
-  const executeDelete = async (delName) => {
+  const handleDeleteClick = async (delName) => {
+    const ok = await confirmDialog({
+      title: 'Delete Connection',
+      message: `Are you sure you want to permanently delete the key '${delName}'?`,
+      confirmText: 'Delete Key',
+      type: 'danger',
+    });
+    if (!ok) return;
     setDeletingKey(delName);
     try {
       await apiClient.delete(`/api/keys/${delName}`);
@@ -99,23 +137,11 @@ export default function Settings({ setError }) {
         return newBal;
       });
       fetchKeys();
-      setModalConfig(null);
+      toast.success(`Key '${delName}' deleted`);
     } catch (err) {
-      if (setError) setError(err.response?.data?.detail || err.message);
-      setModalConfig(null);
+      toast.error(err.response?.data?.detail || err.message);
     }
     setDeletingKey(null);
-  };
-
-  const handleDeleteClick = (delName) => {
-    setModalConfig({
-      type: 'danger',
-      title: 'Delete Connection',
-      message: `Are you sure you want to permanently delete the key '${delName}'?`,
-      confirmText: 'Delete Key',
-      onConfirm: () => executeDelete(delName),
-      onCancel: () => setModalConfig(null)
-    });
   };
 
   const handleFetchBalance = async (kName) => {
@@ -129,7 +155,6 @@ export default function Settings({ setError }) {
     }
 
     setFetchingBalanceFor(kName);
-    if (setError) setError(null);
     try {
       const response = await apiClient.get(`/api/keys/${kName}/balance`);
       setBalances(prev => ({
@@ -137,7 +162,7 @@ export default function Settings({ setError }) {
         [kName]: response.data.balances
       }));
     } catch (err) {
-      if (setError) setError(err.response?.data?.detail || `Failed to fetch balance for ${kName}`);
+      toast.error(err.response?.data?.detail || `Failed to fetch balance for ${kName}`);
     }
     setFetchingBalanceFor(null);
   };
@@ -155,7 +180,7 @@ export default function Settings({ setError }) {
   const handleMaxClick = () => {
       const walletBalances = balances[swapModal];
       if (!walletBalances || !walletBalances[swapFrom]) {
-          setModalConfig({ type: 'danger', title: 'Insufficient Funds', message: `You don't have any ${swapFrom} in this wallet.`, confirmText: 'OK', onConfirm: () => setModalConfig(null) });
+          toast.warn(`You don't have any ${swapFrom} in this wallet.`);
           return;
       }
       setAmountType('from');
@@ -175,13 +200,7 @@ export default function Settings({ setError }) {
           });
 
           setSwapModal(null);
-          setModalConfig({
-            type: 'success',
-            title: 'Swap Executed',
-            message: `Successfully executed market order. Updating balance...`,
-            confirmText: 'OK',
-            onConfirm: () => setModalConfig(null)
-          });
+          toast.success('Market order executed. Updating balance…');
 
           setTimeout(async () => {
               try {
@@ -192,63 +211,93 @@ export default function Settings({ setError }) {
 
       } catch (err) {
           setSwapModal(null);
-          setModalConfig({ type: 'danger', title: 'Swap Failed', message: err.response?.data?.detail || err.message, confirmText: 'OK', onConfirm: () => setModalConfig(null) });
+          toast.error(err.response?.data?.detail || err.message);
       }
       setLoading(false);
   };
 
-  const inputClass = "w-full bg-[#080a0f] border border-[#202532] text-[#eaecef] px-3 py-2 text-xs focus:outline-none focus:border-[#0ea5e9] focus:shadow-[0_0_8px_rgba(14,165,233,0.1)] transition-all duration-200 rounded-lg";
-
   return (
     <PageShell glowColor="gold">
-      <Modal config={modalConfig ? { ...modalConfig, busy: !!deletingKey || loading } : null} />
-
       {/* Swap modal */}
       {swapModal && (
-        <div className="fixed inset-0 z-[999] flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[999] flex items-center justify-center p-4" role="dialog" aria-modal="true">
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setSwapModal(null)} />
-          <div className="relative modal-enter terminal-card max-w-md w-full shadow-[0_0_60px_rgba(0,0,0,0.5)]">
-            <div className="px-5 py-4 border-b border-[#202532] flex justify-between items-center">
+          <div className="relative modal-enter terminal-card max-w-md w-full shadow-pop">
+            <div className="px-5 py-4 border-b border-border flex justify-between items-center">
                 <div>
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-[#eaecef]">Market Execution</h3>
-                    <p className="text-[#848e9c] text-[10px] mt-0.5">Routing via: <span className="text-[#fcd535] font-bold">{swapModal}</span></p>
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-text">Market Execution</h3>
+                    <p className="text-muted text-[10px] mt-0.5">Routing via: <span className="text-accent font-bold">{swapModal}</span></p>
                 </div>
-                <button onClick={() => setSwapModal(null)} className="text-[#848e9c] hover:text-[#f6465d] transition-colors font-bold">&#10005;</button>
+                <button
+                  onClick={() => setSwapModal(null)}
+                  title="Close"
+                  aria-label="Close"
+                  className="text-muted hover:text-danger transition-colors font-bold"
+                >
+                  &#10005;
+                </button>
             </div>
 
             <form onSubmit={executeSwap} className="p-5 space-y-5">
-                <div className="flex space-x-4">
-                    <div className="w-1/2">
-                        <label className="block text-[9px] font-bold uppercase text-[#848e9c] mb-1.5">From Asset (Sell)</label>
-                        <input type="text" required value={swapFrom} onChange={e => setSwapFrom(e.target.value.toUpperCase())} className={`${inputClass} font-bold`} placeholder="USDC" />
-                    </div>
-                    <div className="w-1/2">
-                        <label className="block text-[9px] font-bold uppercase text-[#848e9c] mb-1.5">To Asset (Buy)</label>
-                        <input type="text" required value={swapTo} onChange={e => setSwapTo(e.target.value.toUpperCase())} className={`${inputClass} font-bold`} placeholder="SOL" />
-                    </div>
+                <div className="grid grid-cols-2 gap-4">
+                    <Input
+                      label="From Asset (Sell)"
+                      mono
+                      required
+                      value={swapFrom}
+                      onChange={e => setSwapFrom(e.target.value.toUpperCase())}
+                      placeholder="USDC"
+                    />
+                    <Input
+                      label="To Asset (Buy)"
+                      mono
+                      required
+                      value={swapTo}
+                      onChange={e => setSwapTo(e.target.value.toUpperCase())}
+                      placeholder="SOL"
+                    />
                 </div>
 
                 <div>
                     <div className="flex justify-between items-end mb-1.5">
-                        <label className="block text-[9px] font-bold uppercase text-[#848e9c]">Trade Size</label>
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-muted">Trade Size</span>
                         {balances[swapModal] && balances[swapModal][swapFrom] && (
-                            <span className="text-[9px] text-[#848e9c] font-mono">Avail: {balances[swapModal][swapFrom].free.toFixed(4)} {swapFrom}</span>
+                            <span className="text-[9px] text-muted font-num">Avail: {balances[swapModal][swapFrom].free.toFixed(4)} {swapFrom}</span>
                         )}
                     </div>
-                    <div className="flex bg-[#080a0f] border border-[#202532] rounded-lg overflow-hidden focus-within:border-[#0ea5e9] transition-all duration-200">
-                        <select value={amountType} onChange={e => setAmountType(e.target.value)} className="bg-[#12151c] text-[#848e9c] text-[10px] uppercase font-bold px-2.5 py-2 border-r border-[#202532] outline-none cursor-pointer hover:text-[#eaecef]">
+                    <div className="flex bg-inset border border-border rounded-md overflow-hidden focus-within:border-accent/70 transition-colors duration-200">
+                        <select
+                          value={amountType}
+                          onChange={e => setAmountType(e.target.value)}
+                          className="bg-raised text-muted text-[10px] uppercase font-bold px-2.5 py-2 border-r border-border outline-none cursor-pointer hover:text-text"
+                        >
                             <option value="from">Spend ({swapFrom})</option>
                             <option value="to">Receive ({swapTo})</option>
                         </select>
-                        <input type="number" step="any" required value={swapAmount} onChange={e => setSwapAmount(e.target.value)} className="w-full bg-transparent text-[#eaecef] font-mono px-3 py-2 text-xs focus:outline-none" placeholder="0.00" />
-                        <button type="button" onClick={handleMaxClick} className="bg-[#202532] hover:bg-[#2b3545] text-[#eaecef] text-[9px] font-bold uppercase px-3 transition-colors border-l border-[#202532]">MAX</button>
+                        <input
+                          type="number"
+                          step="any"
+                          required
+                          value={swapAmount}
+                          onChange={e => setSwapAmount(e.target.value)}
+                          className="w-full bg-transparent text-text font-num px-3 py-2 text-xs focus:outline-none placeholder-faint"
+                          placeholder="0.00"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleMaxClick}
+                          title="Use full available balance"
+                          className="bg-overlay hover:bg-border text-text text-[9px] font-bold uppercase px-3 transition-colors border-l border-border"
+                        >
+                          MAX
+                        </button>
                     </div>
                 </div>
 
-                <div className="pt-4 border-t border-[#202532]">
-                    <button type="submit" disabled={loading} className="w-full py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider transition-all duration-200 bg-[#fcd535] hover:bg-[#e5c02a] text-[#181a20] disabled:opacity-50 shadow-[0_0_15px_rgba(252,213,53,0.15)]">
-                        {loading ? 'Processing...' : 'Execute Order'}
-                    </button>
+                <div className="pt-4 border-t border-border">
+                    <Button type="submit" fullWidth loading={loading}>
+                        Execute Order
+                    </Button>
                 </div>
             </form>
           </div>
@@ -259,84 +308,101 @@ export default function Settings({ setError }) {
       <GlowPanel glowColor="gold">
         <SectionHeader
           title="Exchange Connections"
+          subtitle="Encrypted API keys stored locally"
           accentColor="white"
           action={
-            <button
-              onClick={fetchKeys}
-              disabled={refreshing}
-              className="text-[10px] text-[#848e9c] hover:text-[#eaecef] font-bold uppercase transition-all duration-200 border border-[#202532] hover:border-[#848e9c] px-3 py-1.5 rounded-lg bg-[#080a0f]"
-            >
-              {refreshing ? 'Syncing...' : 'Refresh Status'}
-            </button>
+            <Button variant="secondary" size="sm" loading={refreshing} onClick={fetchKeys}>
+              Refresh Status
+            </Button>
           }
         />
 
         <div className="mt-5">
-        {keys.length === 0 ? (
-          <div className="p-6 text-center border border-[#202532] border-dashed rounded-lg bg-[#080a0f]/30">
-              <p className="text-xs text-[#848e9c]">No exchange keys configured. Add one below.</p>
+        {initialLoading ? (
+          <div className="space-y-3">
+            <SkeletonCard />
+            <SkeletonCard />
+          </div>
+        ) : keys.length === 0 ? (
+          <div className="border border-border border-dashed rounded-lg bg-inset/40">
+            <EmptyState
+              icon={IconKeyEmpty}
+              title="No exchange keys configured"
+              description="Add an API key below to enable live trading, balance checks, and market execution."
+            />
           </div>
         ) : (
           <div className="space-y-3">
             {keys.map((k, index) => (
-              <div key={index} className={`flex flex-col bg-[#080a0f]/50 p-4 border border-[#202532] rounded-xl transition-all duration-200 hover:border-[#2b3545] fade-in-delay-${Math.min(index + 1, 6)}`}>
-                <div className="flex items-center justify-between">
-                  <div className="flex flex-col">
-                    <span className="text-[#eaecef] font-bold text-sm">{k.name}</span>
-                    <div className="flex items-center space-x-2 mt-1.5">
-                      <div className={`w-1.5 h-1.5 rounded-full ${k.is_active ? 'bg-[#2ebd85] shadow-[0_0_8px_#2ebd85]' : 'bg-[#f6465d] animate-pulse'}`}></div>
-                      <span className="text-[10px] text-[#848e9c] uppercase font-bold tracking-wider">
-                        {k.exchange} {k.is_sandbox ? 'SANDBOX' : 'LIVE'}
+              <div key={index} className={`flex flex-col bg-inset/50 p-4 border border-border rounded-lg transition-all duration-200 hover:border-border-strong fade-in-delay-${Math.min(index + 1, 6)}`}>
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <ExchangeAvatar exchange={k.exchange} />
+                    <div className="flex flex-col min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-text font-bold text-sm truncate">{k.name}</span>
+                        {k.is_active
+                          ? <Badge variant="success" dot>Connected</Badge>
+                          : <Badge variant="danger" dot pulse>
+                              <span title={k.error_msg} className="cursor-help">Error</span>
+                            </Badge>}
+                        <Badge variant={k.is_sandbox ? 'info' : 'accent'}>
+                          {k.is_sandbox ? 'Sandbox' : 'Live'}
+                        </Badge>
+                      </div>
+                      <span className="text-[10px] text-muted uppercase font-bold tracking-wider mt-1">
+                        {EXCHANGE_NAMES[k.exchange] || k.exchange}
+                        <span className="text-faint normal-case font-num tracking-normal ml-2">••••••••••••••••</span>
                       </span>
-                      {!k.is_active && (
-                        <span className="text-[9px] text-[#f6465d] ml-2 border border-[#f6465d]/30 bg-[#f6465d]/10 px-1.5 py-0.5 rounded cursor-help" title={k.error_msg}>
-                          ERROR
-                        </span>
-                      )}
                     </div>
                   </div>
 
-                  <div className="flex space-x-2 items-center">
+                  <div className="flex gap-2 items-center shrink-0">
                     {k.is_active && (
                       <>
-                        <button
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          title="Execute a market swap through this key"
                           onClick={() => openSwapModal(k.name)}
-                          className="text-[#eaecef] text-[10px] font-bold uppercase transition-all duration-200 border border-[#202532] hover:border-[#eaecef] hover:bg-[#202532] px-3 py-1.5 rounded-lg"
                         >
                           Trade
-                        </button>
-                        <button
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          loading={fetchingBalanceFor === k.name}
+                          title={balances[k.name] ? 'Hide wallet balances' : 'Fetch wallet balances'}
                           onClick={() => handleFetchBalance(k.name)}
-                          disabled={fetchingBalanceFor === k.name}
-                          className="text-[#848e9c] hover:text-[#eaecef] text-[10px] font-bold uppercase transition-colors px-3 py-1.5 rounded-lg disabled:opacity-50"
                         >
-                          {fetchingBalanceFor === k.name ? 'Loading...' : balances[k.name] ? 'Hide Assets' : 'Assets'}
-                        </button>
+                          {balances[k.name] ? 'Hide Assets' : 'Assets'}
+                        </Button>
                       </>
                     )}
-                    <span className="text-[#202532]">|</span>
-                    <button
+                    <Button
+                      variant="danger"
+                      size="sm"
+                      loading={deletingKey === k.name}
+                      title="Delete this connection"
                       onClick={() => handleDeleteClick(k.name)}
-                      disabled={deletingKey === k.name}
-                      className="text-[#f6465d] hover:text-[#f6465d]/80 text-[10px] font-bold uppercase transition-colors px-2 py-1.5 disabled:opacity-50"
                     >
-                      {deletingKey === k.name ? 'Deleting...' : 'Delete'}
-                    </button>
+                      Delete
+                    </Button>
                   </div>
                 </div>
 
                 {balances[k.name] && (
-                  <div className="mt-4 pt-4 border-t border-[#202532]/50 fade-in">
+                  <div className="mt-4 pt-4 border-t border-border/50 fade-in">
                     {Object.keys(balances[k.name]).length === 0 ? (
-                      <span className="text-xs text-[#848e9c]">Wallet is empty.</span>
+                      <span className="text-xs text-muted">Wallet is empty.</span>
                     ) : (
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                         {Object.entries(balances[k.name]).map(([coin, data]) => (
-                          <div key={coin} className="terminal-card p-3 border-l-2 border-[#2ebd85]">
-                            <span className="text-[10px] text-[#848e9c] font-bold uppercase">{coin}</span>
-                            <span className="text-xs text-[#eaecef] font-mono mt-1 block">{data.free.toFixed(4)}</span>
+                          <div key={coin} className="terminal-card p-3 border-l-2 border-success">
+                            <span className="text-[10px] text-muted font-bold uppercase font-num">{coin}</span>
+                            <span className="text-xs text-text font-num mt-1 block">{data.free.toFixed(4)}</span>
                             {data.used > 0 && (
-                              <span className="text-[9px] text-[#fcd535] mt-1 font-mono block">In Orders: {data.used.toFixed(4)}</span>
+                              <span className="text-[9px] text-warn mt-1 font-num block">In Orders: {data.used.toFixed(4)}</span>
                             )}
                           </div>
                         ))}
@@ -353,45 +419,72 @@ export default function Settings({ setError }) {
 
       {/* Configure API Key */}
       <GlowPanel>
-        <SectionHeader title="Configure API Key" accentColor="white" />
+        <SectionHeader
+          title="Configure API Key"
+          subtitle="Credentials are encrypted at rest with Fernet"
+          accentColor="white"
+        />
         <form onSubmit={handleSave} className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-5">
-          <div>
-            <label className="block text-[10px] font-bold uppercase text-[#848e9c] mb-1.5">Exchange</label>
-            <select value={selectedExchange} onChange={e => setSelectedExchange(e.target.value)} className={inputClass}>
-              {EXCHANGES.map(ex => (
-                <option key={ex.id} value={ex.id}>{ex.name}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="block text-[10px] font-bold uppercase text-[#848e9c] mb-1.5">Connection Name</label>
-            <input type="text" required value={keyName} onChange={e => setKeyName(e.target.value)} className={inputClass} placeholder="e.g. Production Wallet" />
-          </div>
-          <div>
-            <label className="block text-[10px] font-bold uppercase text-[#848e9c] mb-1.5">API Key</label>
-            <input type="password" required value={apiKey} onChange={e => setApiKey(e.target.value)} className={inputClass} placeholder="••••••••••••••••" />
-          </div>
-          <div>
-            <label className="block text-[10px] font-bold uppercase text-[#848e9c] mb-1.5">Secret Key</label>
-            <input type="password" required value={apiSecret} onChange={e => setApiSecret(e.target.value)} className={inputClass} placeholder="••••••••••••••••" />
-          </div>
+          <Select label="Exchange" value={selectedExchange} onChange={e => setSelectedExchange(e.target.value)}>
+            {EXCHANGES.map(ex => (
+              <option key={ex.id} value={ex.id}>{ex.name}</option>
+            ))}
+          </Select>
+          <Input
+            label="Connection Name"
+            required
+            value={keyName}
+            onChange={e => setKeyName(e.target.value)}
+            placeholder="e.g. Production Wallet"
+          />
+          <Input
+            label="API Key"
+            type="password"
+            mono
+            required
+            value={apiKey}
+            onChange={e => setApiKey(e.target.value)}
+            placeholder="••••••••••••••••"
+          />
+          <Input
+            label="Secret Key"
+            type="password"
+            mono
+            required
+            value={apiSecret}
+            onChange={e => setApiSecret(e.target.value)}
+            placeholder="••••••••••••••••"
+          />
           {needsPassphrase && (
             <div className="col-span-1 md:col-span-2">
-              <label className="block text-[10px] font-bold uppercase text-[#848e9c] mb-1.5">Passphrase</label>
-              <input type="password" required value={passphrase} onChange={e => setPassphrase(e.target.value)} className={inputClass} placeholder="API Passphrase" />
+              <Input
+                label="Passphrase"
+                type="password"
+                mono
+                required
+                value={passphrase}
+                onChange={e => setPassphrase(e.target.value)}
+                placeholder="API Passphrase"
+                hint="Required for OKX and KuCoin keys."
+              />
             </div>
           )}
 
-          <div className="col-span-1 md:col-span-2 flex items-center justify-between pt-4 border-t border-[#202532] mt-2">
+          <div className="col-span-1 md:col-span-2 flex items-center justify-between pt-4 border-t border-border mt-2">
             <label className="flex items-center cursor-pointer group">
-                <input type="checkbox" checked={isSandbox} onChange={e => setIsSandbox(e.target.checked)} className="w-3.5 h-3.5 accent-[#fcd535] bg-[#080a0f] border-[#202532] rounded-sm cursor-pointer" />
-                <span className="ml-2 text-xs text-[#848e9c] group-hover:text-[#eaecef] transition-colors font-bold uppercase tracking-wider">
+                <input
+                  type="checkbox"
+                  checked={isSandbox}
+                  onChange={e => setIsSandbox(e.target.checked)}
+                  className="w-3.5 h-3.5 accent-accent bg-inset border-border rounded-sm cursor-pointer"
+                />
+                <span className="ml-2 text-xs text-muted group-hover:text-text transition-colors font-bold uppercase tracking-wider">
                   Sandbox Environment (Testnet)
                 </span>
             </label>
-            <button type="submit" disabled={loading} className="bg-[#fcd535] text-[#181a20] px-6 py-2 text-xs font-bold uppercase tracking-wider hover:bg-[#e5c02a] disabled:opacity-50 transition-all duration-200 rounded-lg shadow-[0_0_15px_rgba(252,213,53,0.15)] hover:shadow-[0_0_25px_rgba(252,213,53,0.25)]">
-              {loading ? 'Verifying...' : 'Save Connection'}
-            </button>
+            <Button type="submit" loading={loading}>
+              {loading ? 'Verifying…' : 'Save Connection'}
+            </Button>
           </div>
         </form>
       </GlowPanel>
