@@ -43,6 +43,11 @@ const StatTile = ({ label, value, sub, accent, icon, onClick, delay }) => (
 export default function Home({ setActiveView, bots = [], backendOk = true, refetchBots }) {
   const activeBots = bots.filter((b) => b.is_active);
   const liveBots = bots.filter((b) => b.settings?.api_execution);
+  const runningLive = bots.filter((b) => b.is_active && b.settings?.api_execution).length;
+  const runningPaper = bots.filter((b) => b.is_active && !b.settings?.api_execution).length;
+  const executionSub = (runningLive || runningPaper)
+    ? [runningLive ? `${runningLive} live` : null, runningPaper ? `${runningPaper} paper` : null].filter(Boolean).join(' · ') + ' running'
+    : (liveBots.length ? 'configured, none running' : 'no live execution configured');
   const recentBots = [...bots]
     .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
     .slice(0, 5);
@@ -111,8 +116,8 @@ export default function Home({ setActiveView, bots = [], backendOk = true, refet
           <StatTile
             delay={3}
             label="Live execution"
-            value={liveBots.length}
-            sub={liveBots.length ? 'trading with real funds' : 'paper / backtest only'}
+            value={runningLive}
+            sub={executionSub}
             accent="#f6465d"
             onClick={() => setActiveView('bots')}
             icon={<svg className="w-4.5 h-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>}

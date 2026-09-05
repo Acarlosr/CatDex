@@ -133,8 +133,9 @@ export default function Sidebar({ activeView, setActiveView, openCharts, closeCh
               ? 'bg-overlay text-text border-border'
               : 'text-muted hover:bg-overlay/40 hover:text-text border-transparent hover:border-border/50'
           }`}>
-            <button className="flex-1 flex items-center gap-2 text-left truncate py-1.5 md:py-0" onClick={() => setActiveView(chart.id)}>
+            <button className="flex-1 flex items-center gap-1.5 text-left truncate py-1.5 md:py-0" onClick={() => setActiveView(chart.id)}>
               <span className="truncate">{chart.symbol}</span>
+              <span className="text-[9px] text-info border border-info/30 bg-info/5 px-1.5 py-0.5 rounded font-bold uppercase shrink-0">{(chart.exchange || 'okx').toUpperCase()}</span>
               <span className="text-[9px] text-accent border border-accent/30 bg-accent/5 px-1.5 py-0.5 rounded font-num shrink-0">{chart.timeframe}</span>
             </button>
             <button

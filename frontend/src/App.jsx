@@ -152,9 +152,12 @@ export default function App() {
   }, [refetchBots, hasApiKey]);
 
   const handleOpenChart = (dataset) => {
-    const chartId = `${dataset.symbol}_${dataset.timeframe}`;
+    // Exchange is part of the identity: the same pair can be open
+    // for two exchanges side by side
+    const exchange = (dataset.exchange || 'okx').toLowerCase();
+    const chartId = `${exchange}_${dataset.symbol}_${dataset.timeframe}`;
     if (!openCharts.find(c => c.id === chartId)) {
-      setOpenCharts(prev => [...prev, { ...dataset, id: chartId }]);
+      setOpenCharts(prev => [...prev, { ...dataset, exchange, id: chartId }]);
     }
     setActiveView(chartId);
     if (window.innerWidth < 768) setSidebarOpen(false);
@@ -166,14 +169,15 @@ export default function App() {
       : (bot.settings?.symbol ? [bot.settings.symbol] : []);
 
     const timeframe = bot.settings?.timeframe || "15m";
+    const exchange = (bot.settings?.data_exchange || 'okx').toLowerCase();
     let updatedCharts = [...openCharts];
     let lastOpenedChartId = "";
 
     symbolsToOpen.forEach(sym => {
-      const chartId = `${sym}_${timeframe}`;
+      const chartId = `${exchange}_${sym}_${timeframe}`;
       lastOpenedChartId = chartId;
       if (!updatedCharts.find(c => c.id === chartId)) {
-        updatedCharts.push({ id: chartId, symbol: sym, timeframe: timeframe });
+        updatedCharts.push({ id: chartId, symbol: sym, timeframe, exchange });
       }
     });
 

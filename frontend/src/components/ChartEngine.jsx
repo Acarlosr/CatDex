@@ -111,7 +111,7 @@ function ChartEngine({ dataset, openDataVault }) {
 
   const fetchMarketInfo = async () => {
     try {
-      const response = await apiClient.get(`/api/data/market-info/${dataset.symbol.replace('/', '-')}`);
+      const response = await apiClient.get(`/api/data/market-info/${dataset.symbol.replace('/', '-')}`, { params: { exchange: dataset.exchange || 'okx' } });
       setMarketInfo(response.data);
       updateFormingCandle(response.data?.last);
       setIsLiveStreamActive(true);
@@ -259,7 +259,7 @@ function ChartEngine({ dataset, openDataVault }) {
     if (!candleSeriesRef.current || !volumeSeriesRef.current) return; 
     try { 
       const response = await apiClient.get(`/api/data/candles/${dataset.symbol.replace('/', '-')}`, { 
-        headers: { 'x-timeframe': dataset.timeframe }, params: { limit: 10 } 
+        headers: { 'x-timeframe': dataset.timeframe }, params: { limit: 10, exchange: dataset.exchange || 'okx' } 
       }); 
       if (response.data && response.data.length > 0) { 
         const rawLatest = response.data[response.data.length - 1]; 
@@ -338,7 +338,7 @@ function ChartEngine({ dataset, openDataVault }) {
 
         const response = await apiClient.get(`/api/data/candles/${dataset.symbol.replace('/', '-')}`, {
             headers: { 'x-timeframe': dataset.timeframe },
-            params: {},
+            params: { exchange: dataset.exchange || 'okx' },
             signal
         });
 
@@ -597,6 +597,7 @@ function ChartEngine({ dataset, openDataVault }) {
           <div className="flex flex-col">
             <div className="flex items-center space-x-2">
               <span className="text-text font-bold tracking-wider text-xs md:text-sm font-num">{dataset.symbol}</span>
+              <span className="bg-info/10 border border-info/30 text-info text-[9px] md:text-[10px] px-1.5 py-0.5 rounded uppercase font-bold tracking-widest">{(dataset.exchange || 'okx').toUpperCase()}</span>
               <span className="bg-overlay border border-border text-text text-[9px] md:text-[10px] px-1.5 py-0.5 rounded uppercase font-bold tracking-widest font-num">{dataset.timeframe}</span>
             </div>
             {marketInfo && <span className={`text-[10px] md:text-xs font-num font-medium mt-0.5 ${marketInfo.change_24h >= 0 ? 'text-success' : 'text-danger'}`}>{formatNum(marketInfo.last)}</span>}
