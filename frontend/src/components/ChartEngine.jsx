@@ -60,7 +60,9 @@ function ChartEngine({ dataset, openDataVault }) {
   const priceLinesRef = useRef([]);  
   const lastCandleRef = useRef(null);  
   const isCrosshairActive = useRef(false);
-  const lastSignalIdRef = useRef(0); 
+  const lastSignalIdRef = useRef(0);
+  const lastDbTimeRef = useRef(null);   // newest CLOSED candle time from the DB
+  const formingCandleRef = useRef(null); // synthetic in-progress bar (ticker-fed)
    
   const [candleTimes, setCandleTimes] = useState([]); 
   const [loading, setLoading] = useState(true); 
@@ -107,11 +109,35 @@ function ChartEngine({ dataset, openDataVault }) {
       return minDiff <= 3600 ? closest : null; 
   }, [candleTimes]); 
 
-  const fetchMarketInfo = async () => { 
-    try { 
-      const response = await apiClient.get(`/api/data/market-info/${dataset.symbol.replace('/', '-')}`); 
-      setMarketInfo(response.data); 
-    } catch { /* silent */ }
+  const fetchMarketInfo = async () => {
+    try {
+      const response = await apiClient.get(`/api/data/market-info/${dataset.symbol.replace('/', '-')}`);
+      setMarketInfo(response.data);
+      updateFormingCandle(response.data?.last);
+      setIsLiveStreamActive(true);
+    } catch { setIsLiveStreamActive(false); }
+  };
+
+  // Paint the in-progress candle from the live ticker price. Closed candles
+  // come from the database; the forming one exists only in the chart, so the
+  // engine never sees half-finished data. Only drawn once the previous
+  // candle has landed in the DB — lightweight-charts can't update backwards.
+  const updateFormingCandle = (price) => {
+    if (!price || !candleSeriesRef.current) return;
+    const tfSeconds = getTimeframeSeconds(dataset.timeframe);
+    if (!tfSeconds || !lastDbTimeRef.current) return;
+    const bucket = Math.floor(Date.now() / 1000 / tfSeconds) * tfSeconds;
+    if (bucket !== lastDbTimeRef.current + tfSeconds) return;
+
+    const prev = formingCandleRef.current;
+    const bar = (prev && prev.time === bucket)
+      ? { ...prev, high: Math.max(prev.high, price), low: Math.min(prev.low, price), close: price }
+      : { time: bucket, open: lastCandleRef.current?.close ?? price, high: price, low: price, close: price };
+    formingCandleRef.current = bar;
+    try {
+      candleSeriesRef.current.update(bar);
+      if (!isCrosshairActive.current) setHoverData({ ...bar, value: 0 });
+    } catch { /* series may briefly lag behind DB updates */ }
   };
 
   const initBotConfigs = async () => { 
@@ -220,13 +246,12 @@ function ChartEngine({ dataset, openDataVault }) {
       })); 
       volumeSeriesRef.current.setData(volumeData); 
        
-      if (uniqueData.length > 0) { 
-        lastCandleRef.current = { ...uniqueData[uniqueData.length - 1], value: volumeData[volumeData.length - 1].value }; 
-        if (!isCrosshairActive.current) setHoverData({ ...lastCandleRef.current, time: lastCandleRef.current.time }); 
-         
-        const tfSeconds = getTimeframeSeconds(dataset.timeframe); 
-        setIsLiveStreamActive(((Date.now() / 1000) - lastCandleRef.current.time) < (tfSeconds + 120)); 
-      } 
+      if (uniqueData.length > 0) {
+        lastCandleRef.current = { ...uniqueData[uniqueData.length - 1], value: volumeData[volumeData.length - 1].value };
+        lastDbTimeRef.current = lastCandleRef.current.time;
+        formingCandleRef.current = null;
+        if (!isCrosshairActive.current) setHoverData({ ...lastCandleRef.current, time: lastCandleRef.current.time });
+      }
     } catch (e) { console.error("Data Load Crash Prevented:", e); } 
   }; 
 
@@ -241,24 +266,28 @@ function ChartEngine({ dataset, openDataVault }) {
         const latestTime = safeParseTime(rawLatest.time || rawLatest.timestamp); 
         if (!latestTime) return; 
 
-        const latestDbCandle = { ...rawLatest, time: latestTime }; 
-         
-        if (!lastCandleRef.current || latestDbCandle.time >= lastCandleRef.current.time) { 
-            candleSeriesRef.current.update(latestDbCandle); 
-            volumeSeriesRef.current.update({ 
-                time: latestDbCandle.time, value: latestDbCandle.volume || latestDbCandle.value, 
-                color: latestDbCandle.close >= latestDbCandle.open ? '#2ebd8580' : '#f6465d80' 
-            }); 
+        const latestDbCandle = { ...rawLatest, time: latestTime };
 
-            setCandleTimes(prev => prev.includes(latestDbCandle.time) ? prev : [...prev, latestDbCandle.time].sort((a,b) => a-b)); 
+        // Compare against the last DB candle, not the synthetic forming bar,
+        // so a freshly closed candle always replaces its ticker-fed preview
+        if (!lastDbTimeRef.current || latestDbCandle.time >= lastDbTimeRef.current) {
+            candleSeriesRef.current.update(latestDbCandle);
+            volumeSeriesRef.current.update({
+                time: latestDbCandle.time, value: latestDbCandle.volume || latestDbCandle.value,
+                color: latestDbCandle.close >= latestDbCandle.open ? '#2ebd8580' : '#f6465d80'
+            });
 
-            const newHoverState = { ...latestDbCandle, value: latestDbCandle.volume || latestDbCandle.value, time: latestDbCandle.time }; 
-            if (!isCrosshairActive.current) setHoverData(newHoverState); 
-             
-            const tfSeconds = getTimeframeSeconds(dataset.timeframe); 
-            setIsLiveStreamActive(((Date.now() / 1000) - latestDbCandle.time) < (tfSeconds + 120)); 
-            lastCandleRef.current = newHoverState; 
-        } 
+            setCandleTimes(prev => prev.includes(latestDbCandle.time) ? prev : [...prev, latestDbCandle.time].sort((a,b) => a-b));
+
+            const newHoverState = { ...latestDbCandle, value: latestDbCandle.volume || latestDbCandle.value, time: latestDbCandle.time };
+            if (!isCrosshairActive.current) setHoverData(newHoverState);
+
+            lastDbTimeRef.current = latestDbCandle.time;
+            lastCandleRef.current = newHoverState;
+            if (formingCandleRef.current && formingCandleRef.current.time <= latestDbCandle.time) {
+                formingCandleRef.current = null;
+            }
+        }
       } 
     } catch { /* silent */ }
   };
@@ -271,7 +300,9 @@ function ChartEngine({ dataset, openDataVault }) {
     initBotConfigs();
     pollData();
 
-    const infoInterval = setInterval(fetchMarketInfo, 60000);
+    // 10s matches the server-side market-info TTL cache and drives the
+    // ticker-fed forming candle
+    const infoInterval = setInterval(fetchMarketInfo, 10000);
 
     const initChart = async () => {
       try {

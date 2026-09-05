@@ -36,6 +36,14 @@ def _indicator_fingerprint(settings):
     return md5(json.dumps(ind_nodes, sort_keys=True).encode()).hexdigest()
 
 
+def _tf_seconds(timeframe: str) -> int:
+    if timeframe.endswith('m'): return int(timeframe[:-1]) * 60
+    if timeframe.endswith('h'): return int(timeframe[:-1]) * 3600
+    if timeframe.endswith('d'): return int(timeframe[:-1]) * 86400
+    if timeframe.endswith('w'): return int(timeframe[:-1]) * 604800
+    return 60
+
+
 def _naive_utc(ts):
     """SQLite stores naive datetimes; normalize any pandas/tz-aware value to
     naive UTC so unique constraints and dedup lookups compare consistently."""
@@ -919,6 +927,15 @@ class BotManager:
                         db.commit()
                         return
 
+            # Make the backtest→live handover visible in the console: the next
+            # tick only arrives when the current candle closes on the exchange
+            try:
+                tf_secs = _tf_seconds(timeframe)
+                next_close = datetime.fromtimestamp(((int(time.time()) // tf_secs) + 1) * tf_secs, tz=timezone.utc)
+                blb.push(bot.name, "INFO", f"Live monitoring active ({live_mode}) — next {timeframe} candle closes ~{next_close.strftime('%H:%M')} UTC")
+            except Exception:
+                blb.push(bot.name, "INFO", f"Live monitoring active ({live_mode}) — waiting for the next {timeframe} candle close")
+
         except Exception as e:
             logger.error("Backfill Error: %s", e, exc_info=True)
             blb.push(_log_name, "ERROR", f"Backfill error: {e}")
@@ -1080,6 +1097,9 @@ class BotManager:
 
                     is_buy = bool(entry_series.iloc[-1])
                     is_sell = bool(exit_series.iloc[-1])
+
+                    tick_action = "BUY signal" if is_buy else ("SELL signal" if is_sell else "no signal")
+                    blb.push(bot.name, "INFO", f"Tick {symbol} {timeframe} | close {current_price} | {tick_action}")
 
                     is_api_exec = bot.settings.get("api_execution", False)
                     has_key = bool(bot.settings.get("api_key_name"))
