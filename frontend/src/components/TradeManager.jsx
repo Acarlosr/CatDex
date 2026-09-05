@@ -302,6 +302,14 @@ export default function TradeManager({ setError, bots = [] }) {
     const uniqueExchanges = useMemo(() => [...new Set([...positions, ...orders].map(x => x.exchange || 'okx').filter(Boolean))], [positions, orders]);
     const uniqueIntervals = useMemo(() => [...new Set(positions.map(p => tfByBot[p.bot_name]).filter(Boolean))].sort(), [positions, tfByBot]);
 
+    // When a single bot is selected, prefer the drawdown the engine measured
+    // and enforces (mark-to-market over the backtest, incl. open-position dips)
+    const engineDrawdown = useMemo(() => {
+        if (filterBot === 'all') return null;
+        const dd = bots.find(b => b.name === filterBot)?.settings?.last_backtest_max_drawdown;
+        return (dd === null || dd === undefined) ? null : dd;
+    }, [filterBot, bots]);
+
     // ── Pre-computed lookups (shared by stats + ledger rows) ───────────────
 
     const feesByPosId = useMemo(() => {
@@ -602,8 +610,12 @@ export default function TradeManager({ setError, bots = [] }) {
                     />
                     <StatCard
                         label="Max Drawdown"
-                        value={stats.total > 0 ? `-${safeNum(stats.maxDDpct, 1)}%` : '—'}
-                        sub="peak-to-trough equity %"
+                        value={engineDrawdown !== null
+                            ? `-${safeNum(engineDrawdown, 1)}%`
+                            : (stats.total > 0 ? `-${safeNum(stats.maxDDpct, 1)}%` : '—')}
+                        sub={engineDrawdown !== null
+                            ? 'engine: mark-to-market (backtest)'
+                            : 'closed trades only — intra-trade dips not included'}
                         color="red"
                     />
                     <StatCard

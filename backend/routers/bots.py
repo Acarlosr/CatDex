@@ -94,6 +94,7 @@ def get_bots_summary(db: Session = Depends(get_db)):
                 # Needed by chart-open and the Data Vault live-guard: the
                 # same pair on another exchange is a different dataset
                 "data_exchange": b.settings.get("data_exchange", "okx") if b.settings else "okx",
+                "last_backtest_max_drawdown": b.settings.get("last_backtest_max_drawdown") if b.settings else None,
             }
         }
         for b in bots

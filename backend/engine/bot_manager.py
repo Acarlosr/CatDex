@@ -12,6 +12,7 @@ from collections import defaultdict
 from sqlalchemy import text
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm.attributes import flag_modified
 from backend.core.database import SessionLocal
 from backend.models.bots import BotConfig
 from backend.models.candles import Candle
@@ -976,6 +977,16 @@ class BotManager:
             # After the full chronological run, enforce max drawdown on the
             # mark-to-market equity curve before the bot is allowed to go live
             if run_backtest:
+                # Persist the engine's measured drawdown so the analytics UI
+                # can show the number the gate actually enforces (the
+                # closed-trade curve in the UI understates intra-trade dips)
+                try:
+                    bot.settings = {**bot.settings, "last_backtest_max_drawdown": round(bt_max_dd, 2)}
+                    flag_modified(bot, "settings")
+                    db.commit()
+                except Exception:
+                    db.rollback()
+
                 max_drawdown_pct = float(bot.settings.get("max_drawdown", 0))
                 if max_drawdown_pct > 0:
                     self._drawdown_cache.pop((bot.name, "backtest"), None)
