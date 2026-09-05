@@ -22,7 +22,7 @@ from backend.models.exchange_keys import ExchangeKey
 from backend.engine.evaluator import NodeEvaluator
 from backend.core.events import event_bus
 from backend.core.encryption import decrypt_data
-from backend.core.exchange_registry import build_exchange_from_key
+from backend.core.exchange_registry import build_exchange_from_key, get_exchange_timeframes
 from backend.core import bot_log_buffer as blb
 
 logger = logging.getLogger("apexalgo.bot_manager")
@@ -589,6 +589,7 @@ class BotManager:
             # then runs over one merged timeline so all symbols contend for the
             # shared capital pool in chronological order.
             sym_contexts = []
+            empty_symbols = []
 
             for symbol in symbols:
                 blb.push(bot.name, "INFO", f"Starting: {symbol} | {timeframe} | {live_mode} | lookback={lookback_limit}")
@@ -643,9 +644,14 @@ class BotManager:
                             break
 
                         if current_count == last_count:
-                            stable_checks += 1
-                            if stable_checks >= 5:  # 10 seconds of no change — backfill done
-                                break
+                            # Zero candles is never "done": with several bots
+                            # starting at once the poller may not have reached
+                            # this subscription yet — keep waiting for data
+                            # instead of concluding the backfill finished.
+                            if current_count > 0:
+                                stable_checks += 1
+                                if stable_checks >= 5:  # 10 seconds of no change — backfill done
+                                    break
                         else:
                             stable_checks = 0
 
@@ -654,7 +660,18 @@ class BotManager:
                 final_count = _count_candles()
                 logger.info("Data available for %s: %d candles.", symbol, final_count)
                 if final_count == 0:
-                    blb.push(bot.name, "WARN", f"No candle data for {symbol} on {exchange_name} ({timeframe}). This exchange may not support the '{timeframe}' timeframe.")
+                    # Distinguish a genuinely unsupported timeframe from a
+                    # backfill that simply hasn't delivered (busy poller,
+                    # rate limit) so the user isn't sent down the wrong path
+                    empty_symbols.append(symbol)
+                    try:
+                        supported = get_exchange_timeframes(exchange_name)
+                    except Exception:
+                        supported = None
+                    if supported and timeframe not in supported:
+                        blb.push(bot.name, "ERROR", f"No candle data for {symbol}: {exchange_name} does not support the '{timeframe}' timeframe.")
+                    else:
+                        blb.push(bot.name, "ERROR", f"No candle data received for {symbol} on {exchange_name} ({timeframe}) — the exchange may be busy or rate-limited. Bot will stop; try starting it again.")
                 elif final_count < lookback_limit:
                     blb.push(bot.name, "INFO", f"Historical data ready: {symbol} ({final_count}/{lookback_limit} requested)")
                 else:
@@ -726,6 +743,16 @@ class BotManager:
                     "new_signals": [],
                     "last_close": None,
                 })
+
+            # A whitelist symbol without any candle data means the bot cannot
+            # do what it was configured to do (no backtest, no drawdown gate,
+            # blind live evaluation) — stop instead of silently going live.
+            if empty_symbols:
+                logger.warning("Bot '%s' stopped: no candle data for %s", bot.name, ", ".join(empty_symbols))
+                blb.push(bot.name, "ERROR", f"Stopped: no historical data for {', '.join(empty_symbols)}. Fix the pair/timeframe or try again once the exchange responds.")
+                bot.is_active = False
+                db.commit()
+                return
 
             # ── Merged chronological execution across all symbols ──
             timeline = []

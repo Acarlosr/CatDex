@@ -52,6 +52,11 @@ class CandlePoller:
 
         while self.running:
             self.needs_reconnect = False
+            # Debounce: starting several bots at once fires a burst of
+            # BOT_STATE_CHANGED events — let the burst settle so all new
+            # subscriptions land in one backfill cycle instead of queueing
+            # behind each other.
+            await asyncio.sleep(1.5)
             subs = self._get_active_subscriptions()
 
             if not subs:
