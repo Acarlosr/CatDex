@@ -312,29 +312,36 @@ ApexAlgo/
 │   └── main.py                    # App init, CORS, lifespan, migrations
 ├── frontend/
 │   └── src/
-│       ├── api/                   # Axios client with auth interceptor
+│       ├── api/                   # Axios client (same-origin by default), error humanizer
+│       ├── theme.js               # Light/dark theme state + token access
+│       ├── examples/              # Bundled example strategies (one-click loader)
 │       └── components/
 │           ├── Builder/           # Visual strategy editor (BotBuilder, CustomNodes, indicatorConfig)
-│           ├── ChartEngine.jsx    # TradingView charts with indicator overlays
+│           ├── ui/                # Design-system primitives (Button, Toast, Modal, DataTable, …)
+│           ├── ChartEngine.jsx    # TradingView charts, live ticker candle, signal overlays
 │           ├── BotManagerUI.jsx   # Bot cards: start/stop, console, export/import/duplicate
 │           ├── BotConsole.jsx     # Per-bot live log console (polling, auto-scroll, level colors)
 │           ├── DataManager.jsx    # Historical data download and management (multi-exchange)
-│           ├── TradeManager.jsx   # Quant analytics: equity curve, buy & hold, 8-metric stats
+│           ├── TradeManager.jsx   # Quant analytics: equity curve, buy & hold, drawdown
+│           ├── Home.jsx           # Dashboard landing (stats, recent strategies)
+│           ├── ApiKeyGate.jsx     # Login screen (master key entry)
 │           └── Settings.jsx       # Exchange key management (multi-exchange)
 ├── docker/
-│   ├── backend.Dockerfile         # Python 3.11 + FastAPI + uvicorn
+│   ├── backend.Dockerfile         # Python 3.11 + FastAPI + uvicorn (non-root)
 │   ├── frontend.Dockerfile        # nginx + Node.js (builds frontend at startup)
-│   ├── backend-entrypoint.sh      # Auto-generates .env + SSL certs, starts uvicorn
+│   ├── backend-entrypoint.sh      # Auto-generates .env + SSL certs, drops privileges
 │   ├── frontend-entrypoint.sh     # Waits for .env, builds frontend, starts nginx
-│   └── nginx.conf                 # SPA fallback + SSL on port 5173 + gzip compression
+│   └── nginx.conf                 # SPA fallback + same-origin /api proxy + CSP + gzip
 ├── install/
 │   ├── Setup.sh                   # Full setup (Python, Node, venv, deps, certs, .env)
 │   ├── Start_ApexAlgo.sh          # Start backend + frontend in screen sessions
 │   └── Switch_Mode.sh             # Switch between Docker and screen sessions
-├── docker-compose.yml             # Two services: backend + frontend; bind-mounted source, resource limits
+├── examples/                      # Verified importable strategies (.apex.json)
+├── docker-compose.yml             # Two services; ports on 127.0.0.1 by default (BIND_ADDR opt-in)
 ├── data/                          # Database, .env, SSL certs (gitignored)
 ├── requirements.txt
-└── STRATEGY_CONTEXT.md            # AI prompt context for the visual strategy builder
+├── BETA.md                        # Beta tester guide (setup, safety rules, troubleshooting)
+└── STRATEGY_CONTEXT.md            # AI context: builder reference + .apex.json import schema
 ```
 
 ---
@@ -447,11 +454,13 @@ Adding support for any other CCXT-compatible exchange requires only adding it to
 ## Security
 
 - Exchange API keys are encrypted at rest using Fernet symmetric encryption
-- All API endpoints require a bearer token (`X-API-Key` header) with timing-safe comparison
-- TLS certificates are generated automatically (self-signed in Docker, mkcert in manual setup)
-- `.env` is excluded from version control; secrets are auto-generated during setup
-- Live order execution includes max order value safety guards
-- Order fill status is validated after every exchange API call
+- All API endpoints require the `X-API-Key` header (timing-safe comparison, failed attempts logged and rate-limited per IP)
+- The web UI never embeds the master key: you enter it once in the login screen; the browser talks to a single origin (nginx proxies `/api` to the backend)
+- Ports bind to `127.0.0.1` by default; LAN access is an explicit opt-in (`BIND_ADDR=0.0.0.0`)
+- The backend container runs as a non-root user; `.env` is created with restrictive permissions and excluded from version control
+- Live order execution requires a `max_order_value` safety cap, sizes against the verified exchange balance, and reconciles every order fill (`fetch_order`) before booking
+- Sandbox-flagged keys refuse to run on exchanges without a real testnet
+- Swagger/OpenAPI docs are disabled by default; a Content-Security-Policy is set on the web UI
 
 ---
 

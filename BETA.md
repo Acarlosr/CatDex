@@ -1,5 +1,7 @@
 # ApexAlgo — Beta Tester Guide
 
+> Applies to **v1.0.0A** and later.
+
 Welcome to the ApexAlgo beta! ApexAlgo is a self-hosted, no-code crypto trading platform: you build strategies visually (or import them), backtest them on real historical data, and run them in paper or live mode against your own exchange account.
 
 **Beta status:** this software is under active development. Expect rough edges, report everything that surprises you, and never trade with money you cannot afford to lose.
@@ -15,7 +17,7 @@ Welcome to the ApexAlgo beta! ApexAlgo is a self-hosted, no-code crypto trading 
 ## 2. Install & first start
 
 ```bash
-git clone <REPO_URL> ApexAlgo
+git clone https://github.com/Stenvro/ApexAlgo.git
 cd ApexAlgo
 docker compose up -d
 ```
@@ -104,7 +106,7 @@ Then browse to `https://<your-LAN-IP>:5173` and accept the certificate warning t
 
 ## 8. Reporting feedback
 
-Please report bugs and confusion via GitHub Issues on the repo. Include:
+Please report bugs and confusion via [GitHub Issues](https://github.com/Stenvro/ApexAlgo/issues). Include:
 
 - What you did, what you expected, what happened.
 - Output of `docker compose logs backend | tail -50` if relevant.
