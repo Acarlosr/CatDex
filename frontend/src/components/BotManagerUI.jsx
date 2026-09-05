@@ -332,7 +332,7 @@ export default function BotManagerUI({ bots = [], refetchBots, backendOk = true 
     if (!ok) return;
     setBusyAction(`wipe:${bot.name}`);
     try {
-      await apiClient.delete(`/api/bots/${encodeURIComponent(bot.name)}/cache`);
+      await apiClient.delete(`/api/bots/console/cache?bot_name=${encodeURIComponent(bot.name)}`);
       refetchBots();
       setClearSignals(prev => ({ ...prev, [bot.name]: (prev[bot.name] || 0) + 1 }));
       toast.success(`Cache cleared for '${bot.name}'`);

@@ -36,7 +36,7 @@ export default function BotConsole({ botName, isOpen, clearSignal = 0 }) {
     const poll = async () => {
       try {
         const res = await apiClient.get(
-          `/api/bots/${encodeURIComponent(botName)}/logs?since=${cursorRef.current}`
+          `/api/bots/console/logs?bot_name=${encodeURIComponent(botName)}&since=${cursorRef.current}`
         );
         const newEntries = res.data?.entries ?? [];
         if (newEntries.length > 0) {

@@ -91,6 +91,9 @@ def get_bots_summary(db: Session = Depends(get_db)):
                 "api_key_name": b.settings.get("api_key_name") if b.settings else None,
                 "backtest_on_start": b.settings.get("backtest_on_start", False) if b.settings else False,
                 "backtest_capital": b.settings.get("backtest_capital", 1000) if b.settings else 1000,
+                # Needed by chart-open and the Data Vault live-guard: the
+                # same pair on another exchange is a different dataset
+                "data_exchange": b.settings.get("data_exchange", "okx") if b.settings else "okx",
             }
         }
         for b in bots
@@ -133,8 +136,15 @@ def get_bot_signals(symbol: str, timeframe: str, limit: int = Query(default=5000
         for sid, cid, sym, ts, bn, nm, act, val, ed in rows
     ]
 
+def _sanitize_bot_name(name: str) -> str:
+    """Bot names appear in URLs and filenames; strip path-breaking characters."""
+    cleaned = "".join("-" if ch in "/\\%#?" else ch for ch in name)
+    return " ".join(cleaned.split()).strip()[:100]
+
+
 @router.post("/")
 def create_bot(bot_in: BotCreate, db: Session = Depends(get_db)):
+    bot_in.name = _sanitize_bot_name(bot_in.name) or "Unnamed Bot"
     existing_bot = db.query(BotConfig).filter(BotConfig.name == bot_in.name).first()
     if existing_bot:
         raise HTTPException(status_code=400, detail="A bot with this name already exists.")
@@ -173,7 +183,7 @@ def import_bot(payload: dict = Body(...), db: Session = Depends(get_db)):
     name = bot_data.get("name") or "Imported Bot"
     if not isinstance(name, str):
         raise HTTPException(status_code=400, detail="Invalid file: bot name must be a string.")
-    name = name.strip()[:100] or "Imported Bot"
+    name = _sanitize_bot_name(name) or "Imported Bot"
     if db.query(BotConfig).filter(BotConfig.name == name).first():
         base = f"{name} (imported)"
         name = base
@@ -220,7 +230,7 @@ def update_bot(bot_id: int, background_tasks: BackgroundTasks, bot_data: dict = 
         raise HTTPException(status_code=409, detail="Cannot update a running bot. Stop it first, then save your changes.")
 
     if "name" in bot_data and bot_data["name"] != bot.name:
-        new_name = bot_data["name"]
+        new_name = _sanitize_bot_name(bot_data["name"]) or bot.name
         existing = db.query(BotConfig).filter(BotConfig.name == new_name, BotConfig.id != bot_id).first()
         if existing:
             raise HTTPException(status_code=400, detail="A bot with this name already exists.")
@@ -397,6 +407,18 @@ def export_bot(bot_id: int, db: Session = Depends(get_db)):
         media_type="application/json",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
+
+@router.get("/console/logs")
+def get_bot_logs_q(bot_name: str = Query(...), since: int = Query(default=0)):
+    """Query-param variant: bot names may contain '/', which breaks path routing."""
+    entries = blb.get_logs(bot_name, since_id=since)
+    return {"bot_name": bot_name, "entries": entries}
+
+
+@router.delete("/console/cache")
+def clear_bot_cache_q(bot_name: str = Query(...), db: Session = Depends(get_db)):
+    return clear_bot_cache(bot_name, db)
+
 
 @router.get("/{bot_name}/logs")
 def get_bot_logs(bot_name: str, since: int = Query(default=0)):
