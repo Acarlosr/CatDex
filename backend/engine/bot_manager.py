@@ -536,6 +536,31 @@ class BotManager:
         except Exception as e:
             logger.error("Error during thread backfill for bot_id=%s: %s", bot_id, e, exc_info=True)
 
+    def _flush_backtest_data(self, db, bot_name: str):
+        """Remove a bot's previous backtest results (signals + backtest-mode
+        positions/orders) so a new run simulates the full window cleanly.
+        Live/paper/forward positions are untouched. Chunked deletes keep the
+        write-lock short next to concurrent backfill commits."""
+        from sqlalchemy import text as _text
+        try:
+            for table, where in (
+                ("signals", "bot_name = :bn"),
+                ("orders", "bot_name = :bn AND mode = 'backtest'"),
+                ("positions", "bot_name = :bn AND mode = 'backtest'"),
+            ):
+                while True:
+                    res = db.execute(_text(
+                        f"DELETE FROM {table} WHERE rowid IN "
+                        f"(SELECT rowid FROM {table} WHERE {where} LIMIT 20000)"
+                    ), {"bn": bot_name})
+                    db.commit()
+                    if res.rowcount == 0:
+                        break
+            self._drawdown_cache.pop((bot_name, "backtest"), None)
+        except Exception as exc:
+            db.rollback()
+            logger.warning("Could not flush previous backtest data for '%s': %s", bot_name, exc)
+
     def _execute_sync_backfill(self, bot_id: int):
         db = SessionLocal()
         _log_name = f"bot_id={bot_id}"
@@ -563,6 +588,13 @@ class BotManager:
             exit_node = bot.settings.get("exit_node")
             run_backtest = bot.settings.get("backtest_on_start", False)
             lookback_limit = int(bot.settings.get("backtest_lookback", 150))
+
+            if run_backtest:
+                # A backtest is deterministic, so always simulate the whole
+                # window from scratch. Stitching a new run onto leftovers of a
+                # previous one (different data range or exchange) produces a
+                # patchwork of trades with a double capital start.
+                self._flush_backtest_data(db, bot.name)
 
             symbols = bot.settings.get("symbols", [])
             if not symbols and bot.settings.get("symbol"):
