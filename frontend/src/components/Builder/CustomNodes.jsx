@@ -118,7 +118,7 @@ Object.values(INDICATOR_GROUPS).forEach(group => {
 // ==========================================
 
 export const BotConfigNode = ({ id, data }) => (
-  <div className="bg-raised/90 backdrop-blur-xl border border-purple rounded-xl shadow-lg min-w-[280px]">
+  <div className="bg-raised/90 backdrop-blur-xl border border-purple rounded-xl shadow-lg w-[340px]">
     <div className="bg-purple/10 px-3 py-2 border-b border-purple/30 flex justify-between items-center">
       <span className="font-bold text-purple text-[11px] uppercase tracking-wider">MAIN CONFIGURATION</span>
       {data.onDelete && <button onClick={() => data.onDelete(id)} className="text-muted hover:text-danger transition-colors">✕</button>}

@@ -41,12 +41,14 @@ function rebuildLayoutFromSettings(settings, updateNodeData, deleteNode) {
     const edgeStyle = { stroke: '#848e9c', strokeWidth: 2 };
     const GAP = 50; // universal gap between nodes
 
-    // ── Measured rendered widths and heights from CSS min-w + content ──
+    // ── Measured rendered widths and heights from CSS width + content ──
+    // Config is w-[340px] fixed; the context blocks render wider than their
+    // min-w because of content, so measure generously to avoid overlap
     const SIZE = {
-        config:    { w: 300, h: 620 },
-        whitelist: { w: 280, h: 120 },
-        backtest:  { w: 300, h: 130 },
-        apiKey:    { w: 280, h: 160 },
+        config:    { w: 340, h: 860 },
+        whitelist: { w: 320, h: 200 },
+        backtest:  { w: 320, h: 220 },
+        apiKey:    { w: 320, h: 240 },
         indicator: { w: 270, h: 200 }, // base; grows with params
         priceData: { w: 240, h: 190 },
         condition: { w: 280, h: 200 },
@@ -283,9 +285,9 @@ const BotBuilderFlow = ({ closeBuilder, editingBot }) => {
     } else {
         setNodes([
             { id: getId(), type: 'botConfig', position: { x: 50, y: 50 }, data: { onChange: updateNodeData, onDelete: deleteNode, botName: editingBot ? editingBot.name : 'Apex Strategy Alpha', timeframe: editingBot?.settings?.timeframe || '1m', executionMode: 'paper', maxPositions: 1, maxPositionsScope: 'per_pair', cooldownTrades: 0, cooldownCandles: 0 } },
-            { id: getId(), type: 'whitelist', position: { x: 420, y: 50 }, data: { onChange: updateNodeData, onDelete: deleteNode, pairs: editingBot?.settings?.symbols?.join(', ') || editingBot?.settings?.symbol || 'BTC/USDC' } },
-            { id: getId(), type: 'backtest', position: { x: 420, y: 240 }, data: { onChange: updateNodeData, onDelete: deleteNode, runOnStart: true, capital: 1000, lookback: 150 } },
-            { id: getId(), type: 'apiKey', position: { x: 420, y: 440 }, data: { onChange: updateNodeData, onDelete: deleteNode, apiKeyName: null, dataExchange: 'okx' } }
+            { id: getId(), type: 'whitelist', position: { x: 470, y: 50 }, data: { onChange: updateNodeData, onDelete: deleteNode, pairs: editingBot?.settings?.symbols?.join(', ') || editingBot?.settings?.symbol || 'BTC/USDC' } },
+            { id: getId(), type: 'backtest', position: { x: 470, y: 320 }, data: { onChange: updateNodeData, onDelete: deleteNode, runOnStart: true, capital: 1000, lookback: 150 } },
+            { id: getId(), type: 'apiKey', position: { x: 470, y: 610 }, data: { onChange: updateNodeData, onDelete: deleteNode, apiKeyName: null, dataExchange: 'okx' } }
         ]);
         initRef.current = true;
     }
