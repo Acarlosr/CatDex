@@ -4,7 +4,8 @@ services:
       context: .
       dockerfile: docker/backend.Dockerfile
     ports:
-      - "8000:8000"
+      # Loopback-only by default; set BIND_ADDR=0.0.0.0 for LAN access
+      - "${BIND_ADDR:-127.0.0.1}:8000:8000"
     volumes:
       - ./data:/app/data
       - ./backend:/app/backend:ro
@@ -37,7 +38,8 @@ services:
       context: .
       dockerfile: docker/frontend.Dockerfile
     ports:
-      - "5173:5173"
+      # Loopback-only by default; set BIND_ADDR=0.0.0.0 for LAN access
+      - "${BIND_ADDR:-127.0.0.1}:5173:5173"
     volumes:
       - ./data:/app/data
       - ./frontend/src:/app/frontend/src

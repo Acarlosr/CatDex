@@ -37,14 +37,23 @@ const NAV_ITEMS = [
   },
 ];
 
-export default function Sidebar({ activeView, setActiveView, openCharts, closeChart, runningBots, openBotChart, sidebarOpen, setSidebarOpen }) {
+export default function Sidebar({ activeView, setActiveView, openCharts, closeChart, runningBots, openBotChart, sidebarOpen, setSidebarOpen, backendOk = true }) {
   return (
     <aside className={`fixed inset-y-0 left-0 z-[80] w-64 bg-raised/95 backdrop-blur-xl border-r border-border flex flex-col shadow-2xl transform transition-transform duration-300 ease-in-out ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
 
       {/* Wordmark */}
       <div
-        className="relative p-4 border-b border-border flex justify-between items-center cursor-pointer overflow-hidden group"
+        role="button"
+        tabIndex={0}
+        aria-label="Go to home dashboard"
+        className="relative p-4 border-b border-border flex justify-between items-center cursor-pointer overflow-hidden group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/70"
         onClick={() => setActiveView('home')}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            setActiveView('home');
+          }
+        }}
       >
         <div className="absolute -top-8 -left-8 w-32 h-32 rounded-full blur-[60px] bg-accent/5 pointer-events-none" />
         <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-accent/20 to-transparent" />
@@ -143,8 +152,17 @@ export default function Sidebar({ activeView, setActiveView, openCharts, closeCh
       <div className="p-3 border-t border-border shrink-0">
         <div className="flex items-center justify-between px-2 py-1.5 rounded-md bg-inset/60 border border-border/60">
           <div className="flex items-center gap-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse shadow-[0_0_8px_#2ebd85]" />
-            <span className="text-[9px] font-bold text-muted uppercase tracking-widest">Online</span>
+            {backendOk ? (
+              <>
+                <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse shadow-[0_0_8px_#2ebd85]" />
+                <span className="text-[9px] font-bold text-muted uppercase tracking-widest">Online</span>
+              </>
+            ) : (
+              <>
+                <span className="w-1.5 h-1.5 rounded-full bg-warn animate-pulse" />
+                <span className="text-[9px] font-bold text-warn uppercase tracking-widest">Reconnecting…</span>
+              </>
+            )}
           </div>
           <span className="text-[9px] font-num text-faint">v0.1.0-alpha</span>
         </div>

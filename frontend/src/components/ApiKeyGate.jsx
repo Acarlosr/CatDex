@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { apiClient, setApiKey } from '../api/client';
+import { apiClient, setApiKey, API_BASE_URL } from '../api/client';
 import Button from './ui/Button';
 
-export default function ApiKeyGate({ onUnlock }) {
+export default function ApiKeyGate({ onUnlock, signedOutReason = null }) {
   const [keyInput, setKeyInput] = useState('');
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState(null);
+  const [networkError, setNetworkError] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -14,6 +15,7 @@ export default function ApiKeyGate({ onUnlock }) {
 
     setChecking(true);
     setError(null);
+    setNetworkError(false);
     try {
       await apiClient.get('/api/bots/summary', {
         headers: { 'X-API-Key': trimmed }
@@ -24,8 +26,12 @@ export default function ApiKeyGate({ onUnlock }) {
       const status = err.response?.status;
       if (status === 401 || status === 403) {
         setError('Invalid API key. Check MASTER_API_KEY in data/.env.');
+      } else if (!err.response) {
+        // Network level: backend still starting, down, or the browser refused
+        // the (self-signed) certificate of a cross-origin API.
+        setNetworkError(true);
       } else {
-        setError('Could not reach the backend. Is it running?');
+        setError('The backend responded with an unexpected error. Try again in a moment.');
       }
     } finally {
       setChecking(false);
@@ -56,6 +62,18 @@ export default function ApiKeyGate({ onUnlock }) {
               Quantitative Trading Terminal
             </p>
           </div>
+
+          {signedOutReason && (
+            <div className="flex items-start gap-2.5 p-3 mb-5 bg-info/10 border border-info/40 text-info text-xs rounded-md fade-in">
+              <svg className="w-4 h-4 shrink-0 mt-px" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span className="leading-relaxed">
+                Your session was signed out — the API key changed or was invalid.
+                Re-enter the key from <span className="font-num">data/.env</span>.
+              </span>
+            </div>
+          )}
 
           <p className="text-xs text-muted text-center mb-6 leading-relaxed">
             Enter your API key to unlock the dashboard. You can find it as{' '}
@@ -90,8 +108,40 @@ export default function ApiKeyGate({ onUnlock }) {
               </div>
             )}
 
+            {networkError && (
+              <div className="flex items-start gap-2.5 p-3 bg-warn/10 border border-warn/40 text-warn text-xs rounded-md fade-in">
+                <svg className="w-4 h-4 shrink-0 mt-px" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M12 3l9 16H3l9-16z" />
+                </svg>
+                <div className="leading-relaxed space-y-2">
+                  <p className="font-semibold">Could not reach the backend.</p>
+                  <p className="text-warn/90">
+                    On a first start the backend can take up to ~2 minutes to
+                    initialize (database, certificates). Wait a moment and try again.
+                  </p>
+                  {API_BASE_URL !== '' && (
+                    <p className="text-warn/90">
+                      If this keeps happening, your browser may be blocking the
+                      backend&apos;s self-signed certificate. Open{' '}
+                      <a
+                        href={`${API_BASE_URL}/health`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="underline font-num text-warn hover:text-accent transition-colors"
+                      >
+                        {API_BASE_URL}/health
+                      </a>{' '}
+                      in a new tab, accept the certificate warning until you see{' '}
+                      <span className="font-num">{'{"status":"ok"}'}</span>, then
+                      come back here and press &quot;Try again&quot;.
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
+
             <Button type="submit" size="lg" fullWidth loading={checking} disabled={!keyInput.trim()}>
-              {checking ? 'Verifying…' : 'Unlock terminal'}
+              {checking ? 'Verifying…' : networkError ? 'Try again' : 'Unlock terminal'}
             </Button>
           </form>
         </div>

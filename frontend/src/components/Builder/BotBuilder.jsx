@@ -3,6 +3,7 @@ import ReactFlow, { MiniMap, Controls, Background, useNodesState, useEdgesState,
 import 'reactflow/dist/style.css';
 import { BotConfigNode, WhitelistNode, BacktestNode, ApiKeyNode, IndicatorNode, ConditionNode, LogicNode, StopLossNode, TakeProfitNode, ActionNode, PriceDataNode } from './CustomNodes';
 import { apiClient } from '../../api/client';
+import { humanizeApiError } from '../../api/errors';
 import Button from '../ui/Button';
 import { toast } from '../ui/Toast';
 
@@ -358,6 +359,7 @@ const BotBuilderFlow = ({ closeBuilder, editingBot }) => {
       event.preventDefault();
       const type = event.dataTransfer.getData('application/reactflow');
       if (typeof type === 'undefined' || !type) return;
+      if (!reactFlowInstance) return;
 
       const position = reactFlowInstance.screenToFlowPosition({ x: event.clientX, y: event.clientY });
       const newNode = { id: getId(), type, position, data: getDefaultData(type) };
@@ -371,14 +373,19 @@ const BotBuilderFlow = ({ closeBuilder, editingBot }) => {
     event.dataTransfer.effectAllowed = 'move';
   };
 
-  const handleAddNodeMobile = (type) => {
-      if (window.innerWidth >= 768) return; 
-      const position = reactFlowInstance 
-          ? reactFlowInstance.screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
-          : { x: 50, y: 150 };
+  // Click-to-add: places the node in the center of the current viewport
+  // (works on desktop and mobile; dragging still works on desktop).
+  const handleAddNode = (type) => {
+      let position = { x: 50, y: 150 };
+      if (reactFlowInstance) {
+          const rect = reactFlowWrapper.current?.getBoundingClientRect();
+          const cx = rect ? rect.left + rect.width / 2 : window.innerWidth / 2;
+          const cy = rect ? rect.top + rect.height / 2 : window.innerHeight / 2;
+          position = reactFlowInstance.screenToFlowPosition({ x: cx, y: cy });
+      }
       const newNode = { id: getId(), type, position, data: getDefaultData(type) };
       setNodes((nds) => [...nds, newNode]);
-      setToolboxOpen(false);
+      if (window.innerWidth < 768) setToolboxOpen(false);
   };
 
   const showError = (msg) => {
@@ -581,17 +588,17 @@ const BotBuilderFlow = ({ closeBuilder, editingBot }) => {
 
     } catch (err) {
         console.error(err);
-        const detail = err.response?.data?.detail;
-        const msg = typeof detail === 'string' ? detail
-            : detail?.validation_errors ? detail.validation_errors.join('\n')
-            : err.message;
-        showError(msg);
+        showError(humanizeApiError(err, 'Compile error.'));
     } finally {
         setSaving(false);
     }
   };
 
   const configNodeForName = nodes.find(n => n.type === 'botConfig');
+
+  // Show a getting-started hint while the canvas only holds the setup nodes
+  const SETUP_NODE_TYPES = ['botConfig', 'whitelist', 'backtest', 'apiKey'];
+  const hasStrategyNodes = nodes.some(n => !SETUP_NODE_TYPES.includes(n.type));
 
   // Palette item styling per node class — colors are token utilities
   const paletteItem = (accentClasses) =>
@@ -615,7 +622,7 @@ const BotBuilderFlow = ({ closeBuilder, editingBot }) => {
           { type: 'stopLoss', label: 'Stop Loss (Risk)', cls: 'border-danger/50 text-danger hover:bg-danger/10' },
       ]},
       { title: '4. Execution', items: [
-          { type: 'action', label: 'Action Routing', cls: 'border-text/20 text-text hover:bg-text/10' },
+          { type: 'action', label: 'Entry / Exit Actions (Buy · Sell)', cls: 'border-text/20 text-text hover:bg-text/10' },
       ]},
   ];
 
@@ -656,7 +663,7 @@ const BotBuilderFlow = ({ closeBuilder, editingBot }) => {
                         <div key={item.type}
                             className={paletteItem(item.cls)}
                             onDragStart={(event) => onDragStart(event, item.type)}
-                            onClick={() => handleAddNodeMobile(item.type)}
+                            onClick={() => handleAddNode(item.type)}
                             draggable>
                             {item.label}
                         </div>
@@ -685,6 +692,16 @@ const BotBuilderFlow = ({ closeBuilder, editingBot }) => {
                     className="w-52 bg-inset border border-border hover:border-border-strong focus:border-accent/70 rounded-md px-2.5 py-1.5 text-xs text-text placeholder-faint outline-none transition-colors"
                 />
             </div>
+        )}
+        {nodes.length > 0 && !hasStrategyNodes && (
+          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-10 pointer-events-none px-4 w-full max-w-md">
+            <div className="bg-raised/90 backdrop-blur-xl border border-border rounded-lg px-4 py-3 shadow-card text-center fade-in">
+              <p className="text-[11px] text-text-secondary leading-relaxed">
+                <span className="font-semibold text-text">Build:</span> Indicator → Condition → Entry Action.
+              </p>
+              <p className="text-[10px] text-muted mt-1">Drag or click blocks from the toolbox.</p>
+            </div>
+          </div>
         )}
         <ReactFlow
           nodes={nodes}

@@ -832,7 +832,7 @@ export default function TradeManager({ setError, bots = [] }) {
                             />
                         ) : (
                             <table className="w-full text-left whitespace-nowrap min-w-[860px] relative">
-                                <thead className="bg-[#0b0e14] text-muted sticky top-0 z-10 border-b border-border">
+                                <thead className="bg-inset text-muted sticky top-0 z-10 border-b border-border">
                                     <tr>
                                         <th className={thClass}>Date Closed</th>
                                         <th className={thClass}>Algorithm</th>
@@ -935,7 +935,7 @@ export default function TradeManager({ setError, bots = [] }) {
                             />
                         ) : (
                             <table className="w-full text-left whitespace-nowrap min-w-[800px] relative">
-                                <thead className="bg-[#0b0e14] text-muted sticky top-0 z-10 border-b border-border">
+                                <thead className="bg-inset text-muted sticky top-0 z-10 border-b border-border">
                                     <tr>
                                         <th className={thClass}>Timestamp</th>
                                         <th className={thClass}>Algorithm</th>

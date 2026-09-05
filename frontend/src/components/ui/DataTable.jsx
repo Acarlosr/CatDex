@@ -23,7 +23,7 @@ const DataTable = ({ columns, data, emptyMessage = 'No data available', emptySta
             {columns.map((col) => (
               <th
                 key={col.key}
-                className={`px-4 py-2.5 text-[9px] font-bold uppercase tracking-wider text-muted bg-[#0b0e14] border-b border-border whitespace-nowrap ${alignClass(col.align)}`}
+                className={`px-4 py-2.5 text-[9px] font-bold uppercase tracking-wider text-muted bg-inset border-b border-border whitespace-nowrap ${alignClass(col.align)}`}
               >
                 {col.label}
               </th>

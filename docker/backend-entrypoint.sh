@@ -4,6 +4,12 @@ cd /app
 
 mkdir -p /app/data/cert
 
+# Hostnames/IPs derived from VITE_API_BASE_URL end up in CORS_ORIGINS and
+# the cert SAN (-addext) — only accept plain hostname/IP characters.
+valid_host() {
+    echo "$1" | grep -qE '^[A-Za-z0-9.-]+$'
+}
+
 # ── 1. Generate .env if missing ──
 if [ ! -f /app/data/.env ]; then
     API_KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")
@@ -17,7 +23,11 @@ if [ ! -f /app/data/.env ]; then
     API_HOST=$(echo "$BASE_URL" | sed 's|.*://||;s|:.*||;s|/.*||')
     CORS_LIST="https://localhost:5173,https://127.0.0.1:5173"
     if [ -n "$API_HOST" ] && [ "$API_HOST" != "localhost" ] && [ "$API_HOST" != "127.0.0.1" ]; then
-        CORS_LIST="${CORS_LIST},https://${API_HOST}:5173"
+        if valid_host "$API_HOST"; then
+            CORS_LIST="${CORS_LIST},https://${API_HOST}:5173"
+        else
+            echo "[backend] WARNING: host '${API_HOST}' from VITE_API_BASE_URL contains invalid characters; skipping CORS entry"
+        fi
     fi
 
     umask 177
@@ -41,7 +51,11 @@ else
         API_HOST=$(grep '^VITE_API_BASE_URL=' /app/data/.env | sed 's|.*://||;s|:.*||;s|/.*||' || true)
         CORS_LIST="https://localhost:5173,https://127.0.0.1:5173"
         if [ -n "$API_HOST" ] && [ "$API_HOST" != "localhost" ] && [ "$API_HOST" != "127.0.0.1" ]; then
-            CORS_LIST="${CORS_LIST},https://${API_HOST}:5173"
+            if valid_host "$API_HOST"; then
+                CORS_LIST="${CORS_LIST},https://${API_HOST}:5173"
+            else
+                echo "[backend] WARNING: host '${API_HOST}' from VITE_API_BASE_URL contains invalid characters; skipping CORS entry"
+            fi
         fi
         printf '\nCORS_ORIGINS=%s\n' "$CORS_LIST" >> /app/data/.env
         echo "[backend] Added CORS_ORIGINS=${CORS_LIST} to existing .env"
@@ -57,8 +71,10 @@ if [ ! -f /app/data/cert/cert.pem ] || [ ! -f /app/data/cert/key.pem ]; then
     SAN="DNS:localhost,IP:127.0.0.1"
     API_HOST=$(grep '^VITE_API_BASE_URL=' /app/data/.env | sed 's|.*://||;s|:.*||' 2>/dev/null || true)
     if [ -n "$API_HOST" ] && [ "$API_HOST" != "localhost" ]; then
+        if ! valid_host "$API_HOST"; then
+            echo "[backend] WARNING: host '${API_HOST}' from VITE_API_BASE_URL contains invalid characters; skipping cert SAN entry"
         # Check if it looks like an IP address
-        if echo "$API_HOST" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+        elif echo "$API_HOST" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
             SAN="${SAN},IP:${API_HOST}"
         else
             SAN="${SAN},DNS:${API_HOST}"

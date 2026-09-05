@@ -33,7 +33,13 @@ export const ConfirmDialogHost = () => {
   const [request, setRequest] = useState(null);
 
   useEffect(() => {
-    const handler = (e) => setRequest(e.detail || null);
+    const handler = (e) =>
+      setRequest((prev) => {
+        // A new confirm while one is pending: resolve the old promise as
+        // "cancelled" so its caller never hangs forever.
+        prev?.resolve?.(false);
+        return e.detail || null;
+      });
     window.addEventListener('apex-confirm', handler);
     return () => window.removeEventListener('apex-confirm', handler);
   }, []);

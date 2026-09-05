@@ -14,8 +14,12 @@ export function clearApiKey() {
     localStorage.removeItem(API_KEY_STORAGE);
 }
 
+// Empty string = relative URLs, i.e. same origin as the frontend (nginx/vite proxy).
+// Set VITE_API_BASE_URL only when the API lives on a different origin.
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
+
 export const apiClient = axios.create({
-    baseURL: import.meta.env.VITE_API_BASE_URL,
+    baseURL: API_BASE_URL,
     headers: {
         'Content-Type': 'application/json'
     }
@@ -34,8 +38,13 @@ apiClient.interceptors.response.use(
     (error) => {
         const status = error.response?.status;
         if (status === 401 || status === 403) {
+            // Only treat this as a signed-out session when a stored key was
+            // invalidated (a failed unlock attempt on the gate has no stored key).
+            const hadStoredKey = Boolean(getApiKey());
             clearApiKey();
-            window.dispatchEvent(new CustomEvent('api-key-invalid'));
+            if (hadStoredKey) {
+                window.dispatchEvent(new CustomEvent('api-key-invalid', { detail: { reason: 'expired' } }));
+            }
         }
         return Promise.reject(error);
     }

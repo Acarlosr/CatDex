@@ -37,6 +37,20 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 5173,
     https: readHttpsConfig(),
+    // Same-origin API proxy so `npm run dev` works with the default
+    // empty VITE_API_BASE_URL (client calls /api/... on its own origin).
+    // secure: false — the backend uses a self-signed cert.
+    proxy: {
+      '/api': {
+        target: 'https://localhost:8000',
+        changeOrigin: true,
+        secure: false,
+      },
+      '/health': {
+        target: 'https://localhost:8000',
+        secure: false,
+      },
+    },
   },
 })
 

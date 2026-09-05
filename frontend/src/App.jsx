@@ -34,22 +34,34 @@ export default function App() {
   });
 
   const [openCharts, setOpenCharts] = useState(() => {
-      const savedCharts = localStorage.getItem('apex_openCharts');
-      return savedCharts ? JSON.parse(savedCharts) : [];
+      try {
+          const savedCharts = localStorage.getItem('apex_openCharts');
+          const parsed = savedCharts ? JSON.parse(savedCharts) : [];
+          return Array.isArray(parsed) ? parsed : [];
+      } catch {
+          return [];
+      }
   });
 
   const [allBots, setAllBots] = useState([]);
   const [error, setError] = useState(null);
+  const [backendOk, setBackendOk] = useState(true);
 
   const [showBuilder, setShowBuilder] = useState(false);
   const [editingBot, setEditingBot] = useState(null);
 
   const [sidebarOpen, setSidebarOpen] = useState(window.innerWidth > 768);
   const [hasApiKey, setHasApiKey] = useState(() => Boolean(getApiKey()));
+  const [signedOutReason, setSignedOutReason] = useState(null);
   const pollIntervalRef = useRef(15000);
+  const userClosedSidebarRef = useRef(false);
+  const prevWidthRef = useRef(window.innerWidth);
 
   useEffect(() => {
-      const handleKeyInvalid = () => setHasApiKey(false);
+      const handleKeyInvalid = (e) => {
+          setSignedOutReason(e.detail?.reason || 'expired');
+          setHasApiKey(false);
+      };
       window.addEventListener('api-key-invalid', handleKeyInvalid);
       return () => window.removeEventListener('api-key-invalid', handleKeyInvalid);
   }, []);
@@ -64,14 +76,25 @@ export default function App() {
 
   useEffect(() => {
     const handleResize = () => {
-      if (window.innerWidth < 768) {
+      const prev = prevWidthRef.current;
+      const now = window.innerWidth;
+      prevWidthRef.current = now;
+      if (now < 768 && prev >= 768) {
+        // Shrinking below the breakpoint: always collapse (overlay mode).
         setSidebarOpen(false);
-      } else {
+      } else if (now >= 768 && prev < 768 && !userClosedSidebarRef.current) {
+        // Growing past the breakpoint: reopen only if the user didn't close it themselves.
         setSidebarOpen(true);
       }
     };
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // Sidebar open/close initiated by the user — remember the choice on desktop.
+  const setSidebarOpenUser = useCallback((open) => {
+    if (window.innerWidth >= 768) userClosedSidebarRef.current = !open;
+    setSidebarOpen(open);
   }, []);
 
   const runningBots = allBots.filter(b => b.is_active);
@@ -80,8 +103,10 @@ export default function App() {
     try {
       const res = await apiClient.get('/api/bots/summary');
       setAllBots(res.data);
+      setBackendOk(true);
       pollIntervalRef.current = 15000;
     } catch {
+      setBackendOk(false);
       pollIntervalRef.current = Math.min(pollIntervalRef.current * 2, 60000);
     }
   }, []);
@@ -175,10 +200,19 @@ export default function App() {
       }
   };
 
+  // Stable callback so the memoized ChartEngine doesn't re-render every poll.
+  const openDataVault = useCallback(() => {
+      setActiveView('manager');
+      if (window.innerWidth < 768) setSidebarOpen(false);
+  }, []);
+
   if (!hasApiKey) {
     return (
       <>
-        <ApiKeyGate onUnlock={() => setHasApiKey(true)} />
+        <ApiKeyGate
+          signedOutReason={signedOutReason}
+          onUnlock={() => { setSignedOutReason(null); setHasApiKey(true); }}
+        />
         <Toaster />
       </>
     );
@@ -197,7 +231,7 @@ export default function App() {
       <button
         aria-label="Open sidebar"
         className={`fixed top-3 left-4 z-[90] p-2 bg-raised/80 backdrop-blur-xl border border-border hover:border-accent rounded-md shadow-lg text-muted hover:text-accent transition-all duration-300 ${sidebarOpen ? 'opacity-0 pointer-events-none -translate-x-10' : 'opacity-100 translate-x-0'}`}
-        onClick={() => setSidebarOpen(true)}
+        onClick={() => setSidebarOpenUser(true)}
       >
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg>
       </button>
@@ -214,7 +248,8 @@ export default function App() {
         runningBots={runningBots}
         openBotChart={openBotChart}
         sidebarOpen={sidebarOpen}
-        setSidebarOpen={setSidebarOpen}
+        setSidebarOpen={setSidebarOpenUser}
+        backendOk={backendOk}
       />
 
       <div className={`flex-1 flex flex-col h-full overflow-hidden relative transition-all duration-300 ease-in-out ${sidebarOpen ? 'md:ml-64' : 'ml-0'}`}>
@@ -240,14 +275,14 @@ export default function App() {
         <main className="flex-1 overflow-x-hidden overflow-y-auto flex flex-col relative w-full custom-scrollbar bg-bg">
 
           {activeView === 'home' && (
-             <Home setActiveView={navigateTo} bots={allBots} />
+             <Home setActiveView={navigateTo} bots={allBots} backendOk={backendOk} refetchBots={refetchBots} />
           )}
 
-          {activeView === 'manager' && <DataManager openChart={handleOpenChart} setError={setError} />}
+          {activeView === 'manager' && <DataManager openChart={handleOpenChart} />}
 
-          {activeView === 'settings' && <Settings setError={setError} />}
+          {activeView === 'settings' && <Settings />}
 
-          {activeView === 'bots' && <BotManagerUI bots={allBots} refetchBots={refetchBots} setError={setError} />}
+          {activeView === 'bots' && <BotManagerUI bots={allBots} refetchBots={refetchBots} backendOk={backendOk} />}
 
           {activeView === 'trades' && <TradeManager setError={setError} bots={allBots} />}
 
@@ -255,7 +290,7 @@ export default function App() {
             activeView === chart.id && (
               <div key={chart.id} className="flex-1 w-full h-full relative border-t-0 border border-border fade-in">
                  <Suspense fallback={<LazyFallback label="Loading chart" />}>
-                   <ChartEngine dataset={chart} />
+                   <ChartEngine dataset={chart} openDataVault={openDataVault} />
                  </Suspense>
               </div>
             )

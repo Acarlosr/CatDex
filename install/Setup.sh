@@ -1,4 +1,16 @@
 #!/usr/bin/env bash
+#
+# ApexAlgo manual (non-Docker) setup.
+#
+# API base URL — two deployment modes:
+#   * Docker:  the frontend nginx proxies /api/ and /health to the backend
+#     (same-origin), so VITE_API_BASE_URL can be empty; the client defaults
+#     to its own origin.
+#   * Manual (this script): there is no nginx proxy, so this script writes
+#     an explicit VITE_API_BASE_URL (https://<host-ip>:8000) into data/.env
+#     and the client talks to the backend origin directly. During
+#     `npm run dev`, Vite's dev-server proxy also forwards /api and /health
+#     to https://localhost:8000, so an empty value works there too.
 
 set -euo pipefail
 

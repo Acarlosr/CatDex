@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { apiClient } from '../api/client';
+import { humanizeApiError } from '../api/errors';
 import PageShell from './ui/PageShell';
 import GlowPanel from './ui/GlowPanel';
 import SectionHeader from './ui/SectionHeader';
@@ -100,7 +101,7 @@ export default function DataManager({ openChart }) {
       const response = await apiClient.get('/api/data/summary');
       setSummary(response.data);
     } catch (err) {
-      toast.error(err.message || 'Failed to load data summary.');
+      toast.error(humanizeApiError(err, 'Failed to load data summary.'));
     }
     setInitialLoading(false);
   }, []);
@@ -142,13 +143,15 @@ export default function DataManager({ openChart }) {
         end_date: new Date(endDate).toISOString()
       };
 
-      const response = await apiClient.post(`/api/data/fetch/${symbol.toUpperCase()}`, payload);
+      // Accept both BTC/USDC and BTC-USDC — the API path expects the dash form.
+      const normalizedSymbol = symbol.trim().toUpperCase().replace(/\//g, '-');
+      const response = await apiClient.post(`/api/data/fetch/${normalizedSymbol}`, payload);
       toast.success(response.data.new_saved != null
         ? `${response.data.message} ${response.data.new_saved} new candles added.`
         : response.data.message);
       fetchSummary();
     } catch (err) {
-      toast.error(err.response?.data?.detail || err.response?.data?.error || err.message);
+      toast.error(humanizeApiError(err, 'Failed to download candle data.'));
     }
     setLoading(false);
   };
@@ -168,7 +171,7 @@ export default function DataManager({ openChart }) {
       toast.success(`${row.symbol} synced. ${response.data.new_saved} new candles fetched.`);
       fetchSummary();
     } catch (err) {
-      toast.error(err.response?.data?.detail || err.response?.data?.error || err.message);
+      toast.error(humanizeApiError(err, 'Failed to sync candles.'));
     }
     setSyncingSymbol(null);
   };
@@ -187,7 +190,7 @@ export default function DataManager({ openChart }) {
       toast.success(res.data.message);
       fetchSummary();
     } catch (err) {
-      toast.error(err.response?.data?.detail || err.message);
+      toast.error(humanizeApiError(err, 'Failed to delete candle data.'));
       setPruneModalConfig(null);
     }
     setLoading(false);
@@ -395,7 +398,8 @@ export default function DataManager({ openChart }) {
                   required
                   value={symbol}
                   onChange={e => setSymbol(e.target.value.toUpperCase())}
-                  placeholder="BTC-USDC"
+                  placeholder="BTC-USDC or BTC/USDC"
+                  hint="Both BTC-USDC and BTC/USDC work"
                 />
               </div>
             </div>

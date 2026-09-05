@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, useMemo, useCallback, memo } from 'react';
 import { createChart, CandlestickSeries, HistogramSeries, LineSeries, createSeriesMarkers } from 'lightweight-charts';
 import { apiClient } from '../api/client';
+import { humanizeApiError } from '../api/errors';
 import { INDICATOR_SCALE_MAP } from './Builder/indicatorConfig';
 import Button from './ui/Button';
 import Badge from './ui/Badge';
@@ -49,7 +50,7 @@ const formatCrypto = (val) => {
     return Number(val).toFixed(6).replace(/\.?0+$/, '');  
 }; 
 
-function ChartEngine({ dataset }) {
+function ChartEngine({ dataset, openDataVault }) {
   const chartContainerRef = useRef(); 
   const chartRef = useRef(null); 
   const candleSeriesRef = useRef(null); 
@@ -280,8 +281,8 @@ function ChartEngine({ dataset }) {
         const chart = createChart(chartContainerRef.current, {
           // --- APEXALGO DARK THEME ---
           // Raw hex required by lightweight-charts; values mirror the CSS tokens
-          // (bg #080a0f, border #202532, muted-ish #7d8598)
-          layout: { background: { type: 'solid', color: '#080a0f' }, textColor: '#7d8598' },
+          // (bg #080a0f, border #202532, muted #848e9c)
+          layout: { background: { type: 'solid', color: '#080a0f' }, textColor: '#848e9c' },
           grid: { vertLines: { color: '#202532' }, horzLines: { color: '#202532' } },
           crosshair: { mode: 0 },
 
@@ -333,7 +334,7 @@ function ChartEngine({ dataset }) {
         });
       } catch (error) {
         if (signal.aborted) return;
-        setErrorMsg(`API Error: ${error.message}`);
+        setErrorMsg(humanizeApiError(error, 'Failed to load chart data.'));
       } finally { if (!signal.aborted) setLoading(false); }
     };
 
@@ -470,7 +471,7 @@ function ChartEngine({ dataset }) {
 
             const priceLine = { 
                 price: pos.entry_price, 
-                color: isBacktest ? '#7d8598' : (pos.side === 'long' ? '#2ebd85' : '#f6465d'), 
+                color: isBacktest ? '#848e9c' : (pos.side === 'long' ? '#2ebd85' : '#f6465d'), // muted token for backtest
                 lineWidth: 2, 
                 lineStyle: 2,  
                 axisLabelVisible: true, 
@@ -672,7 +673,12 @@ function ChartEngine({ dataset }) {
                 <h3 className="text-sm font-semibold text-text mb-1">Chart failed to load</h3>
                 <p className="text-xs text-muted leading-relaxed">{errorMsg}</p>
               </div>
-              <Button variant="secondary" size="sm" onClick={() => setRetryTick(t => t + 1)}>Retry</Button>
+              <div className="flex items-center justify-center gap-2.5">
+                <Button variant="secondary" size="sm" onClick={() => setRetryTick(t => t + 1)}>Retry</Button>
+                {errorMsg.startsWith('No data found') && openDataVault && (
+                  <Button variant="primary" size="sm" onClick={openDataVault}>Open Data Vault</Button>
+                )}
+              </div>
             </div>
           </div>
         )}

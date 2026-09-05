@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { apiClient } from '../api/client';
+import { humanizeApiError } from '../api/errors';
 import PageShell from './ui/PageShell';
 import GlowPanel from './ui/GlowPanel';
 import SectionHeader from './ui/SectionHeader';
@@ -84,7 +85,7 @@ export default function Settings() {
       const response = await apiClient.get('/api/keys');
       setKeys(Array.isArray(response.data) ? response.data : []);
     } catch (err) {
-      toast.error(err.response?.data?.detail || err.message);
+      toast.error(humanizeApiError(err));
     }
     setRefreshing(false);
     setInitialLoading(false);
@@ -115,7 +116,7 @@ export default function Settings() {
       setPassphrase('');
       fetchKeys();
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'An unexpected error occurred.');
+      toast.error(humanizeApiError(err, 'An unexpected error occurred.'));
     }
     setLoading(false);
   };
@@ -139,7 +140,7 @@ export default function Settings() {
       fetchKeys();
       toast.success(`Key '${delName}' deleted`);
     } catch (err) {
-      toast.error(err.response?.data?.detail || err.message);
+      toast.error(humanizeApiError(err));
     }
     setDeletingKey(null);
   };
@@ -162,7 +163,7 @@ export default function Settings() {
         [kName]: response.data.balances
       }));
     } catch (err) {
-      toast.error(err.response?.data?.detail || `Failed to fetch balance for ${kName}`);
+      toast.error(humanizeApiError(err, `Failed to fetch balance for ${kName}`));
     }
     setFetchingBalanceFor(null);
   };
@@ -211,7 +212,7 @@ export default function Settings() {
 
       } catch (err) {
           setSwapModal(null);
-          toast.error(err.response?.data?.detail || err.message);
+          toast.error(humanizeApiError(err));
       }
       setLoading(false);
   };

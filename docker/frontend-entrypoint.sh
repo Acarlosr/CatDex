@@ -12,11 +12,20 @@ echo "[frontend] Backend config ready"
 ln -sf /app/data/.env /app/.env
 ln -sf /app/data/cert /app/.cert
 
-# Fill in the CSP connect-src with the backend origin from .env
+# Fill in the CSP connect-src extra origin. With the same-origin nginx
+# proxy, 'self' covers the default setup; __API_ORIGIN__ only matters
+# when a custom VITE_API_BASE_URL points the client at another origin.
 API_ORIGIN=$(grep '^VITE_API_BASE_URL=' /app/data/.env | cut -d= -f2- | sed 's|/*$||')
-[ -z "$API_ORIGIN" ] && API_ORIGIN="https://localhost:8000"
+# Sanitize: only accept a plain https origin (no spaces, quotes, or CSP
+# metacharacters) so a malformed .env value cannot break the nginx config.
+if [ -z "$API_ORIGIN" ]; then
+    API_ORIGIN="https://localhost:8000"
+elif ! echo "$API_ORIGIN" | grep -qE '^https://[A-Za-z0-9.:-]+$'; then
+    echo "[frontend] WARNING: VITE_API_BASE_URL '${API_ORIGIN}' is not a valid https origin; falling back to https://localhost:8000"
+    API_ORIGIN="https://localhost:8000"
+fi
 sed -i "s|__API_ORIGIN__|${API_ORIGIN}|g" /etc/nginx/conf.d/default.conf
-echo "[frontend] CSP connect-src allows ${API_ORIGIN}"
+echo "[frontend] CSP connect-src allows 'self' and ${API_ORIGIN}"
 
 # Build frontend if needed (skip if env and source haven't changed since last build)
 SRC_HASH=$(find /app/frontend/src -type f -exec md5sum {} + | sort | md5sum | cut -d' ' -f1)

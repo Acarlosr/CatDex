@@ -1,5 +1,7 @@
 import { useState, useRef, memo, useCallback } from 'react';
 import { apiClient } from '../api/client';
+import { humanizeApiError } from '../api/errors';
+import ExampleLoader from './ExampleLoader';
 import PageShell from './ui/PageShell';
 import SectionHeader from './ui/SectionHeader';
 import Button from './ui/Button';
@@ -279,7 +281,7 @@ function ChevronIcon({ open }) {
   );
 }
 
-export default function BotManagerUI({ bots = [], refetchBots }) {
+export default function BotManagerUI({ bots = [], refetchBots, backendOk = true }) {
   const [openConsoles, setOpenConsoles] = useState({});
   const [busyAction, setBusyAction]     = useState(null);  // 'delete:ID' or 'wipe:name'
   const [togglingBot, setTogglingBot]   = useState(null);  // bot id being started/stopped
@@ -294,7 +296,7 @@ export default function BotManagerUI({ bots = [], refetchBots }) {
       refetchBots();
       toast.success(isCurrentlyActive ? 'Bot stopped' : 'Engine started');
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to toggle bot state.');
+      toast.error(humanizeApiError(err, 'Failed to toggle bot state.'));
     }
     setTogglingBot(null);
   }, [refetchBots]);
@@ -314,7 +316,7 @@ export default function BotManagerUI({ bots = [], refetchBots }) {
       refetchBots();
       toast.success(`'${botName}' deleted`);
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to delete bot.');
+      toast.error(humanizeApiError(err, 'Failed to delete bot.'));
     }
     setBusyAction(null);
   }, [busyAction, refetchBots]);
@@ -368,18 +370,20 @@ export default function BotManagerUI({ bots = [], refetchBots }) {
   const handleImportFile = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    let payload;
     try {
-      const text = await file.text();
-      const payload = JSON.parse(text);
+      payload = JSON.parse(await file.text());
+    } catch {
+      toast.error('Invalid bot file. The file may be corrupted or from an incompatible version.');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+    try {
       await apiClient.post('/api/bots/import', payload);
       refetchBots();
       toast.success(`'${payload?.bot?.name || 'Bot'}' imported successfully`);
     } catch (err) {
-      const raw = err.response?.data?.detail;
-      const detail = typeof raw === 'string' ? raw
-          : raw?.validation_errors ? raw.validation_errors.join('\n')
-          : 'Invalid bot file. The file may be corrupted or from an incompatible version.';
-      toast.error(detail);
+      toast.error(humanizeApiError(err, 'Invalid bot file. The file may be corrupted or from an incompatible version.'));
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
@@ -391,7 +395,7 @@ export default function BotManagerUI({ bots = [], refetchBots }) {
       refetchBots();
       toast.success(`'${bot.name}' duplicated`);
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to duplicate bot.');
+      toast.error(humanizeApiError(err, 'Failed to duplicate bot.'));
     }
   }, [refetchBots]);
 
@@ -435,23 +439,41 @@ export default function BotManagerUI({ bots = [], refetchBots }) {
         }
       />
 
+      {!backendOk && (
+        <div className="p-3 bg-warn/10 border border-warn/40 text-warn text-xs rounded-md flex items-center gap-2.5 fade-in">
+          <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M12 3l9 16H3l9-16z" />
+          </svg>
+          <span>Backend unreachable — retrying… {bots.length > 0 ? 'Showing the last known bot list.' : ''}</span>
+        </div>
+      )}
+
       {bots.length === 0 ? (
         <div className="terminal-card border-dashed">
-          <EmptyState
-            icon={IconBotEmpty}
-            title="No trading bots yet"
-            description="Design a strategy visually in the builder, or import an existing .apex.json bot file to get started."
-            action={
-              <div className="flex items-center gap-2.5">
-                <Button size="sm" onClick={() => window.dispatchEvent(new CustomEvent('open-builder'))}>
-                  Open Builder
-                </Button>
-                <Button size="sm" variant="secondary" onClick={() => fileInputRef.current?.click()}>
-                  Import File
-                </Button>
-              </div>
-            }
-          />
+          {!backendOk ? (
+            <EmptyState
+              icon={IconBotEmpty}
+              title="Backend unreachable"
+              description="Your strategies cannot be loaded right now. The list will reappear automatically once the connection is restored."
+            />
+          ) : (
+            <EmptyState
+              icon={IconBotEmpty}
+              title="No trading bots yet"
+              description="Design a strategy visually in the builder, load a working example, or import an existing .apex.json bot file. More examples live in the repo's examples/ directory."
+              action={
+                <div className="flex items-center gap-2.5 flex-wrap justify-center">
+                  <Button size="sm" onClick={() => window.dispatchEvent(new CustomEvent('open-builder'))}>
+                    Open Builder
+                  </Button>
+                  <ExampleLoader onImported={refetchBots} />
+                  <Button size="sm" variant="secondary" onClick={() => fileInputRef.current?.click()}>
+                    Import File
+                  </Button>
+                </div>
+              }
+            />
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">

@@ -1,6 +1,7 @@
 import Badge from './ui/Badge';
 import Button from './ui/Button';
 import EmptyState from './ui/EmptyState';
+import ExampleLoader from './ExampleLoader';
 
 /**
  * Home — dashboard landing screen.
@@ -39,7 +40,7 @@ const StatTile = ({ label, value, sub, accent, icon, onClick, delay }) => (
   </button>
 );
 
-export default function Home({ setActiveView, bots = [] }) {
+export default function Home({ setActiveView, bots = [], backendOk = true, refetchBots }) {
   const activeBots = bots.filter((b) => b.is_active);
   const liveBots = bots.filter((b) => b.settings?.api_execution);
   const recentBots = [...bots]
@@ -57,7 +58,9 @@ export default function Home({ setActiveView, bots = [] }) {
         {/* Hero */}
         <header className="mb-10 fade-in">
           <div className="flex items-center gap-2 mb-4">
-            <Badge variant="success" dot pulse>Engine online</Badge>
+            {backendOk
+              ? <Badge variant="success" dot pulse>Engine online</Badge>
+              : <Badge variant="warn" dot pulse>Reconnecting…</Badge>}
             {activeBots.length > 0 && (
               <Badge variant="accent">{activeBots.length} running</Badge>
             )}
@@ -140,8 +143,13 @@ export default function Home({ setActiveView, bots = [] }) {
             {recentBots.length === 0 ? (
               <EmptyState
                 title="No strategies yet"
-                description="Build your first algorithm in the visual editor — drag indicators, conditions and actions onto the canvas."
-                action={<Button size="sm" onClick={() => openBuilder()}>Open builder</Button>}
+                description="Build your first algorithm in the visual editor — drag indicators, conditions and actions onto the canvas. Or start from a working example (more live in the repo's examples/ directory)."
+                action={
+                  <div className="flex items-center gap-2.5 flex-wrap justify-center">
+                    <Button size="sm" onClick={() => openBuilder()}>Open builder</Button>
+                    <ExampleLoader onImported={refetchBots} />
+                  </div>
+                }
               />
             ) : (
               <ul className="divide-y divide-border/50">
@@ -185,10 +193,16 @@ export default function Home({ setActiveView, bots = [] }) {
         </section>
 
         {/* Footer status line */}
-        <div className="mt-10 flex items-center gap-6 text-[9px] font-num text-faint uppercase tracking-widest fade-in-delay-6">
-          <span className="flex items-center gap-1.5"><span className="w-1 h-1 rounded-full bg-success" /> Engine core</span>
-          <span className="flex items-center gap-1.5"><span className="w-1 h-1 rounded-full bg-success" /> Database</span>
-          <span className="flex items-center gap-1.5"><span className="w-1 h-1 rounded-full bg-info" /> Candle poller</span>
+        <div className="mt-10 flex items-center gap-6 text-[9px] font-num uppercase tracking-widest fade-in-delay-6">
+          {backendOk ? (
+            <>
+              <span className="flex items-center gap-1.5 text-faint"><span className="w-1 h-1 rounded-full bg-success" /> Engine core</span>
+              <span className="flex items-center gap-1.5 text-faint"><span className="w-1 h-1 rounded-full bg-success" /> Database</span>
+              <span className="flex items-center gap-1.5 text-faint"><span className="w-1 h-1 rounded-full bg-info" /> Candle poller</span>
+            </>
+          ) : (
+            <span className="flex items-center gap-1.5 text-warn"><span className="w-1 h-1 rounded-full bg-warn animate-pulse" /> Backend unreachable — reconnecting…</span>
+          )}
         </div>
       </div>
     </div>
