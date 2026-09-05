@@ -168,6 +168,23 @@ export default function Settings() {
     setFetchingBalanceFor(null);
   };
 
+  // Keep open asset views current: silently refresh every 12s in the
+  // background (no spinner, keep last known values on a failed fetch)
+  const openBalanceKeys = Object.keys(balances).sort().join(',');
+  useEffect(() => {
+    if (!openBalanceKeys) return;
+    const keyNames = openBalanceKeys.split(',');
+    const t = setInterval(() => {
+      keyNames.forEach(async (kName) => {
+        try {
+          const response = await apiClient.get(`/api/keys/${encodeURIComponent(kName)}/balance`);
+          setBalances(prev => (prev[kName] ? { ...prev, [kName]: response.data.balances } : prev));
+        } catch { /* keep last known values */ }
+      });
+    }, 12000);
+    return () => clearInterval(t);
+  }, [openBalanceKeys]);
+
   const openSwapModal = async (kName) => {
       setSwapModal(kName);
       if (!balances[kName]) {

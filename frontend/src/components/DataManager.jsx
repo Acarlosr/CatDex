@@ -77,6 +77,7 @@ function RowAction({ title, onClick, disabled, tone, children }) {
 
 export default function DataManager({ openChart }) {
   const [summary, setSummary] = useState([]);
+  const [liveKeys, setLiveKeys] = useState(() => new Set());
   const [initialLoading, setInitialLoading] = useState(true);
   const [loading, setLoading] = useState(false);
   const [syncingSymbol, setSyncingSymbol] = useState(null);
@@ -98,13 +99,30 @@ export default function DataManager({ openChart }) {
 
   const fetchSummary = useCallback(async () => {
     try {
-      const response = await apiClient.get('/api/data/summary');
-      setSummary(response.data);
+      const [summaryRes, botsRes] = await Promise.all([
+        apiClient.get('/api/data/summary'),
+        apiClient.get('/api/bots/summary').catch(() => ({ data: [] })),
+      ]);
+      setSummary(summaryRes.data);
+      // Datasets that a running bot polls live must not be deleted
+      const keys = new Set();
+      botsRes.data.filter(b => b.is_active).forEach(b => {
+        const s = b.settings || {};
+        const ex = (s.data_exchange || 'okx').toLowerCase();
+        const tf = s.timeframe;
+        const syms = s.symbols?.length ? s.symbols : (s.symbol ? [s.symbol] : []);
+        syms.forEach(sym => keys.add(`${ex}|${sym}|${tf}`));
+      });
+      setLiveKeys(keys);
     } catch (err) {
       toast.error(humanizeApiError(err, 'Failed to load data summary.'));
     }
     setInitialLoading(false);
   }, []);
+
+  const isLiveRow = useCallback((row) =>
+    liveKeys.has(`${(row.exchange || 'okx').toLowerCase()}|${row.symbol}|${row.timeframe}`),
+  [liveKeys]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -197,6 +215,10 @@ export default function DataManager({ openChart }) {
   };
 
   const handleDeleteClick = (row) => {
+    if (isLiveRow(row)) {
+      toast.warn('This dataset is in use by a running bot. Stop the bot first.');
+      return;
+    }
     setPruneDate('');
     setPruneModalConfig({ symbol: row.symbol, timeframe: row.timeframe });
   };
@@ -218,17 +240,27 @@ export default function DataManager({ openChart }) {
   const renderedData = filteredData.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
   const bulkDeleteFiltered = async () => {
-      if (filteredData.length === 0) return;
+      // Datasets a running bot depends on are excluded from the wipe
+      const deletable = filteredData.filter(row => !isLiveRow(row));
+      const liveCount = filteredData.length - deletable.length;
+      if (deletable.length === 0) {
+          toast.warn(liveCount > 0
+            ? 'All matching datasets are in use by running bots. Stop the bots first.'
+            : 'No datasets match your filters.');
+          return;
+      }
       const ok = await confirmDialog({
         title: 'Bulk Wipe Data',
-        message: `You are about to permanently delete all candle history for ${filteredData.length} dataset${filteredData.length === 1 ? '' : 's'} matching your filters. This cannot be undone.`,
+        message: `You are about to permanently delete all candle history for ${deletable.length} dataset${deletable.length === 1 ? '' : 's'} matching your filters.`
+          + (liveCount > 0 ? ` ${liveCount} live dataset${liveCount === 1 ? ' is' : 's are'} in use by running bots and will be kept.` : '')
+          + ' This cannot be undone.',
         confirmText: 'Wipe All Filtered',
         type: 'danger',
       });
       if (!ok) return;
       setLoading(true);
       try {
-          await Promise.all(filteredData.map(row =>
+          await Promise.all(deletable.map(row =>
               apiClient.delete(`/api/data?symbol=${encodeURIComponent(row.symbol)}&timeframe=${row.timeframe}`)
           ));
           fetchSummary();
@@ -246,7 +278,12 @@ export default function DataManager({ openChart }) {
     },
     {
       key: 'symbol', label: 'Symbol',
-      render: (v) => <span className="text-text font-bold">{v}</span>,
+      render: (v, row) => (
+        <span className="inline-flex items-center gap-2">
+          <span className="text-text font-bold">{v}</span>
+          {isLiveRow(row) && <Badge variant="success" dot pulse>Live</Badge>}
+        </span>
+      ),
     },
     {
       key: 'timeframe', label: 'Interval',
@@ -287,9 +324,11 @@ export default function DataManager({ openChart }) {
               {IconChart}
             </RowAction>
             <RowAction
-              title="Delete or prune this dataset"
+              title={isLiveRow(row)
+                ? 'In use by a running bot — stop the bot first to delete this data'
+                : 'Delete or prune this dataset'}
               tone="danger"
-              disabled={isSyncing || loading}
+              disabled={isSyncing || loading || isLiveRow(row)}
               onClick={() => handleDeleteClick(row)}
             >
               {IconTrash}

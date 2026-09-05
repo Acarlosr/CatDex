@@ -141,6 +141,7 @@ export default function TradeManager({ setError, bots = [] }) {
     const [filterSymbol, setFilterSymbol] = useState('all');
     const [filterExchange, setFilterExchange] = useState('all');
     const [filterMode, setFilterMode] = useState('all');
+    const [filterInterval, setFilterInterval] = useState('all');
 
     // ── Data fetching ─────────────────────────────────────────────────────────
 
@@ -201,13 +202,21 @@ export default function TradeManager({ setError, bots = [] }) {
 
     // ── Filters ───────────────────────────────────────────────────────────────
 
+    // Positions don't carry a timeframe; resolve it through the owning bot
+    const tfByBot = useMemo(() => {
+        const map = {};
+        bots.forEach(b => { map[b.name] = b.settings?.timeframe || null; });
+        return map;
+    }, [bots]);
+
     const applyFilters = useCallback((arr) =>
         arr
             .filter(x => filterBot === 'all' || x.bot_name === filterBot)
             .filter(x => filterSymbol === 'all' || x.symbol === filterSymbol)
             .filter(x => filterExchange === 'all' || (x.exchange || 'okx') === filterExchange)
-            .filter(x => filterMode === 'all' || x.mode === filterMode),
-    [filterBot, filterSymbol, filterExchange, filterMode]);
+            .filter(x => filterMode === 'all' || x.mode === filterMode)
+            .filter(x => filterInterval === 'all' || tfByBot[x.bot_name] === filterInterval),
+    [filterBot, filterSymbol, filterExchange, filterMode, filterInterval, tfByBot]);
 
     const resetPage = () => setCurrentPage(1);
 
@@ -292,6 +301,7 @@ export default function TradeManager({ setError, bots = [] }) {
     const uniqueBots = useMemo(() => [...new Set(positions.map(p => p.bot_name).filter(Boolean))], [positions]);
     const uniqueSymbols = useMemo(() => [...new Set([...positions, ...orders].map(x => x.symbol).filter(Boolean))], [positions, orders]);
     const uniqueExchanges = useMemo(() => [...new Set([...positions, ...orders].map(x => x.exchange || 'okx').filter(Boolean))], [positions, orders]);
+    const uniqueIntervals = useMemo(() => [...new Set(positions.map(p => tfByBot[p.bot_name]).filter(Boolean))].sort(), [positions, tfByBot]);
 
     // ── Pre-computed lookups (shared by stats + ledger rows) ───────────────
 
@@ -531,10 +541,14 @@ export default function TradeManager({ setError, bots = [] }) {
             {/* ── FILTER BAR ─────────────────────────────────────────────────── */}
             <div className="terminal-card px-4 py-3 sticky top-0 z-20">
                 <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-3">
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 flex-1 min-w-[280px] max-w-[720px]">
+                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 flex-1 min-w-[280px] max-w-[880px]">
                         <Select label="Algorithm" value={filterBot} onChange={e => { setFilterBot(e.target.value); resetPage(); }} className="py-1.5! text-xs!">
                             <option value="all">All Bots</option>
                             {uniqueBots.map(b => <option key={b} value={b}>{b}</option>)}
+                        </Select>
+                        <Select label="Interval" value={filterInterval} onChange={e => { setFilterInterval(e.target.value); resetPage(); }} className="py-1.5! text-xs! font-num">
+                            <option value="all">All Intervals</option>
+                            {uniqueIntervals.map(tf => <option key={tf} value={tf}>{tf}</option>)}
                         </Select>
                         <Select label="Asset" value={filterSymbol} onChange={e => { setFilterSymbol(e.target.value); resetPage(); }} className="py-1.5! text-xs! font-num">
                             <option value="all">All Pairs</option>
@@ -720,9 +734,7 @@ export default function TradeManager({ setError, bots = [] }) {
                             ))}
                         </div>
                     )}
-                    {priceSyncing && (
-                        <p className="text-[8px] text-muted mt-2 text-right animate-pulse">Updating prices…</p>
-                    )}
+                    {/* price refresh happens silently in the background */}
                 </div>
             </div>
 
