@@ -61,6 +61,13 @@ class BotManager:
         self._candle_locks = defaultdict(asyncio.Lock)  # (exchange, symbol, timeframe) -> serializer
         self._processed_candles = {}  # (exchange, symbol, timeframe) -> last processed candle ts
         self._balance_cache = {}  # (key_name, quote_ccy) -> (fetched_at, free_balance)
+        self._bg_tasks = set()  # strong refs so fire-and-forget tasks are not GC'd mid-flight
+
+    def _spawn(self, coro):
+        task = asyncio.create_task(coro)
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
+        return task
 
     def _get_drawdown(self, bot_name, db, mode_group="live", starting_capital=1000.0):
         """Return cached drawdown state, lazy-initializing from DB on first access.
@@ -103,8 +110,8 @@ class BotManager:
         self.running = True
         logger.info("Bot Manager started. Engine is fully operational.")
 
-        asyncio.create_task(self._startup_backfill())
-        asyncio.create_task(self._listen_for_bot_starts())
+        self._spawn(self._startup_backfill())
+        self._spawn(self._listen_for_bot_starts())
 
         queue = event_bus.subscribe("CANDLE_CLOSED")
         while self.running:
@@ -114,7 +121,7 @@ class BotManager:
                 symbol = event_data["symbol"]
                 timeframe = event_data["timeframe"]
                 candle_ts = event_data.get("timestamp")
-                asyncio.create_task(self._handle_candle_close(exchange, symbol, timeframe, candle_ts))
+                self._spawn(self._handle_candle_close(exchange, symbol, timeframe, candle_ts))
             except asyncio.TimeoutError:
                 continue
             except asyncio.CancelledError:
@@ -161,6 +168,41 @@ class BotManager:
                 order = {**order, **merged}
         return order
 
+    def _cancel_unfilled_order(self, ccxt_inst, order_id, ccxt_symbol):
+        """Try to cancel an order whose fill state could not be confirmed.
+        Returns True when the cancel definitively succeeded (the order did not
+        fill), False when the order may still have filled — e.g. cancel raises
+        'order not found' or 'already filled' — so the caller must treat the
+        order state as unknown instead of silently booking it as canceled."""
+        if not order_id:
+            # Order never got an exchange id, so nothing on the exchange can fill
+            return True
+        try:
+            ccxt_inst.cancel_order(order_id, ccxt_symbol)
+            return True
+        except Exception as exc:
+            logger.warning("cancel_order %s failed: %s", order_id, exc)
+            return False
+
+    @staticmethod
+    def _below_market_minimum(ccxt_inst, ccxt_symbol, amount, price):
+        """Return a human-readable violation string when an order would fall
+        below the exchange's minimum amount/cost limits, else None. Missing
+        limit metadata is treated as no restriction."""
+        try:
+            limits = (ccxt_inst.market(ccxt_symbol) or {}).get("limits") or {}
+            min_amount = (limits.get("amount") or {}).get("min")
+            min_cost = (limits.get("cost") or {}).get("min")
+            if min_amount is not None and amount < float(min_amount):
+                return f"amount {amount} below exchange minimum {float(min_amount)}"
+            if min_cost is not None and price:
+                order_value = amount * float(price)
+                if order_value < float(min_cost):
+                    return f"order ${order_value:.2f} below exchange minimum ${float(min_cost):.2f}"
+        except Exception:
+            return None
+        return None
+
     @staticmethod
     def _fee_in_quote(fee_info, ccxt_symbol, price):
         """CCXT fee cost can be denominated in base currency (typical for buys);
@@ -198,11 +240,11 @@ class BotManager:
                 free = float(free)
                 self._balance_cache[cache_key] = (now, free)
                 return free
-            logger.warning("No %s balance found for key '%s', sizing from backtest_capital", quote, api_key_record.name)
-            blb.push(bot_name, "WARN", f"Could not read {quote} balance, sizing from backtest_capital")
+            logger.warning("No %s balance found for key '%s'", quote, api_key_record.name)
+            blb.push(bot_name, "WARN", f"Could not read {quote} balance from exchange")
         except Exception as exc:
-            logger.warning("fetch_balance failed for key '%s': %s — sizing from backtest_capital", api_key_record.name, exc)
-            blb.push(bot_name, "WARN", f"Balance fetch failed, sizing from backtest_capital: {exc}")
+            logger.warning("fetch_balance failed for key '%s': %s", api_key_record.name, exc)
+            blb.push(bot_name, "WARN", f"Balance fetch failed: {exc}")
         return None
 
     def _close_all_open_positions(self, bot, db, key_records):
@@ -466,7 +508,7 @@ class BotManager:
 
         bot_ids = await asyncio.to_thread(get_active_bot_ids)
         for bot_id in bot_ids:
-            asyncio.create_task(self._run_backfill_safely(bot_id))
+            self._spawn(self._run_backfill_safely(bot_id))
 
     async def _listen_for_bot_starts(self):
         queue = event_bus.subscribe("BOT_STATE_CHANGED")
@@ -474,7 +516,7 @@ class BotManager:
             try:
                 event = await asyncio.wait_for(queue.get(), timeout=1.0)
                 if event["action"] == "started":
-                    asyncio.create_task(self._run_backfill_safely(event["bot_id"]))
+                    self._spawn(self._run_backfill_safely(event["bot_id"]))
             except asyncio.TimeoutError:
                 continue
             except asyncio.CancelledError:
@@ -722,12 +764,19 @@ class BotManager:
                         trade_amount = self._calculate_trade_amount(current_price, bot.settings, current_equity=bt_equity)
                         if trade_amount is not None:
                             bt_entry_price = current_price * (1 + bt_entry_slippage)
+                            # Percentage sizing spends a share of equity; cap the
+                            # amount so slippage + entry fee fit within the pool
+                            # (100% sizing would otherwise always exceed it)
+                            _entry_cfg = bot.settings.get("trade_settings", {}).get("entry", {})
+                            if _entry_cfg.get("amount_type", "percentage") != "fixed":
+                                max_affordable = bt_equity / (bt_entry_price * (1 + bt_entry_fee))
+                                trade_amount = min(trade_amount, max_affordable)
                             investment_cost = bt_entry_price * trade_amount
                             total_cost = investment_cost * (1 + bt_entry_fee)
-                            if total_cost <= bt_equity:
+                            if trade_amount > 0 and total_cost <= bt_equity + 1e-9:
                                 ctx["trade_entry_indices"].append(index)
                                 ctx["original_amount"] = trade_amount
-                                bt_equity -= total_cost  # Lock capital + entry fee
+                                bt_equity = max(bt_equity - total_cost, 0.0)  # Lock capital + entry fee
                                 open_bt_pos = Position(exchange=exchange_name, bot_name=bot.name, symbol=symbol, mode="backtest", status="open", side="long", entry_price=bt_entry_price, amount=trade_amount, created_at=_naive_utc(ts))
                                 db.add(open_bt_pos)
                                 db.flush()
@@ -1090,22 +1139,50 @@ class BotManager:
                                 buy_fee = 0.0
                                 if mode in ["paper", "live"] and api_key_record:
                                     ccxt_inst = get_ccxt()
-                                    if mode == "live":
-                                        # Size live trades from the real exchange balance,
-                                        # not the configured backtest capital
-                                        live_capital = self._get_live_capital(ccxt_inst, api_key_record, ccxt_symbol, bot.name)
-                                        if live_capital is not None:
-                                            trade_amount = self._calculate_trade_amount(current_price, bot.settings, current_equity=live_capital)
-                                            if trade_amount is None:
-                                                logger.warning("Skipping buy for %s: no free balance to size trade", symbol)
-                                                continue
+
+                                    # A restart replays the last candle: never place a second
+                                    # BUY for a candle that already produced one
+                                    existing_buy = db.query(Order.id).filter(
+                                        Order.bot_name == bot.name, Order.symbol == symbol,
+                                        Order.mode == mode, Order.side == "buy",
+                                        Order.timestamp == latest_time,
+                                    ).first()
+                                    if existing_buy:
+                                        logger.info("%s BUY for %s @ %s already recorded, skipping duplicate entry", mode.upper(), symbol, latest_time)
+                                        continue
+
+                                    # Size trades from the exchange balance, capped at the
+                                    # per-bot allocation (backtest_capital)
+                                    allocation = float(bot.settings.get("backtest_capital", 1000))
+                                    free_balance = self._get_live_capital(ccxt_inst, api_key_record, ccxt_symbol, bot.name)
+                                    if free_balance is None:
+                                        if mode == "live":
+                                            logger.warning("Skipping entry for %s: could not verify exchange balance", symbol)
+                                            blb.push(bot.name, "WARN", "Skipping entry: could not verify exchange balance")
+                                            continue
+                                        sizing_capital = allocation
+                                        logger.info("Bot '%s': sandbox balance unavailable, sizing paper entry from allocation $%.2f", bot.name, allocation)
+                                    else:
+                                        sizing_capital = min(free_balance, allocation)
+                                        logger.info("Bot '%s': sizing %s entry from %s $%.2f (free=$%.2f, allocation=$%.2f)",
+                                            bot.name, mode, "free balance" if free_balance < allocation else "allocation",
+                                            sizing_capital, free_balance, allocation)
+                                    trade_amount = self._calculate_trade_amount(current_price, bot.settings, current_equity=sizing_capital)
+                                    if trade_amount is None:
+                                        logger.warning("Skipping buy for %s: no capital available to size trade", symbol)
+                                        continue
                                     trade_amount = float(ccxt_inst.amount_to_precision(ccxt_symbol, trade_amount))
                                     if trade_amount <= 0:
                                         logger.warning("Trade amount rounded to zero for %s after precision, skipping", ccxt_symbol)
                                         continue
+                                    min_violation = self._below_market_minimum(ccxt_inst, ccxt_symbol, trade_amount, current_price)
+                                    if min_violation:
+                                        logger.warning("%s BUY skipped for %s: %s", mode.upper(), symbol, min_violation)
+                                        blb.push(bot.name, "WARN", f"{min_violation} — increase trade size")
+                                        continue
                                     # Safety guard: reject orders exceeding max_order_value
                                     max_order_usd = float(bot.settings.get("max_order_value", 0))
-                                    if mode == "live" and max_order_usd > 0:
+                                    if max_order_usd > 0:
                                         order_value_usd = trade_amount * current_price
                                         if order_value_usd > max_order_usd:
                                             logger.warning("SAFETY: BUY order $%.2f exceeds max_order_value $%.2f for %s. Skipping.", order_value_usd, max_order_usd, symbol)
@@ -1117,10 +1194,16 @@ class BotManager:
                                     okx_order = self._reconcile_order(ccxt_inst, okx_order, ccxt_symbol)
                                     filled_qty = float(okx_order.get("filled") or 0)
                                     if filled_qty <= 0 and okx_order.get("status") != "closed":
-                                        logger.warning("%s BUY unfilled (status=%s). Recording as canceled.", mode.upper(), okx_order.get("status"))
-                                        db.add(Order(exchange=exchange, bot_name=bot.name, mode=mode, symbol=symbol, side="buy", order_type="market", price=current_price, amount=trade_amount, timestamp=latest_time, exchange_order_id=okx_order.get("id"), status="canceled"))
-                                        db.commit()
-                                        continue
+                                        if self._cancel_unfilled_order(ccxt_inst, okx_order.get("id"), ccxt_symbol):
+                                            logger.warning("%s BUY unfilled (status=%s), canceled on exchange.", mode.upper(), okx_order.get("status"))
+                                            db.add(Order(exchange=exchange, bot_name=bot.name, mode=mode, symbol=symbol, side="buy", order_type="market", price=current_price, amount=trade_amount, timestamp=latest_time, exchange_order_id=okx_order.get("id"), status="canceled"))
+                                            db.commit()
+                                            continue
+                                        # Cancel did not go through: the order may have filled
+                                        # after the last poll. Book the position conservatively
+                                        # at the requested amount so it stays tracked.
+                                        logger.error("%s BUY state unknown for %s (id=%s) — booking position at requested amount, verify on the exchange", mode.upper(), symbol, okx_order.get("id"))
+                                        blb.push(bot.name, "ERROR", f"BUY order state unknown on {symbol} — position booked at requested amount/last price, verify manually on the exchange")
                                     # Book the position for what actually filled, even
                                     # when the exchange still reports the order as open
                                     if filled_qty > 0:
@@ -1128,6 +1211,19 @@ class BotManager:
                                     actual_price = okx_order.get("average") or okx_order.get("price") or current_price
                                     order_id = okx_order.get("id")
                                     buy_fee = self._fee_in_quote(okx_order.get("fee"), ccxt_symbol, actual_price)
+                                    # A fee charged in base currency comes out of the bought
+                                    # amount itself; only the net amount is actually held
+                                    fee_info = okx_order.get("fee") or {}
+                                    base_ccy = ccxt_symbol.split('/')[0]
+                                    if fee_info.get("currency") and str(fee_info["currency"]).upper() == base_ccy.upper():
+                                        try:
+                                            base_fee_cost = float(fee_info.get("cost") or 0)
+                                        except (TypeError, ValueError):
+                                            base_fee_cost = 0.0
+                                        if base_fee_cost > 0:
+                                            net_amount = float(ccxt_inst.amount_to_precision(ccxt_symbol, max(trade_amount - base_fee_cost, 0)))
+                                            if net_amount > 0:
+                                                trade_amount = net_amount
                                     self._balance_cache.pop((api_key_record.name, ccxt_symbol.split('/')[-1]), None)
 
                                 # Position created after successful exchange order
@@ -1161,6 +1257,7 @@ class BotManager:
                     active_positions = bot_positions
 
                     for pos in active_positions:
+                        if not bot.is_active: break
                         if pos.id in just_opened_ids: continue
 
                         exit_events = self._check_exits(pos, current_price, current_high, current_low, is_sell, bot.settings, current_atr, row_open=current_open)
@@ -1192,6 +1289,24 @@ class BotManager:
                                     if close_qty <= 0:
                                         logger.warning("Sell amount rounded to zero for %s after precision, skipping", ccxt_symbol)
                                         continue
+                                    min_violation = self._below_market_minimum(ccxt_inst, ccxt_symbol, close_qty, ev['price'])
+                                    if min_violation:
+                                        if self._below_market_minimum(ccxt_inst, ccxt_symbol, pos.amount, ev['price']):
+                                            # The whole remainder can never be sold on the
+                                            # exchange; close the position administratively
+                                            # instead of retrying a doomed sell forever
+                                            logger.warning("%s position remainder on %s unsellable (%s) — closing administratively", mode.upper(), symbol, min_violation)
+                                            blb.push(bot.name, "WARN", f"Position remainder on {symbol} below exchange minimum ({min_violation}) — closed administratively, dust remains on the exchange")
+                                            pos.status = "closed"
+                                            pos.closed_at = latest_time
+                                            self._update_drawdown(bot.name, "live", pos.profit_abs)
+                                            with self._position_states_lock:
+                                                self.position_states.pop(pos.id, None)
+                                            db.commit()
+                                            break
+                                        logger.warning("%s SELL skipped for %s: %s", mode.upper(), symbol, min_violation)
+                                        blb.push(bot.name, "WARN", f"Sell on {symbol} skipped: {min_violation}")
+                                        continue
                                     okx_order = ccxt_inst.create_market_sell_order(ccxt_symbol, close_qty)
                                     logger.info("%s SELL response: id=%s status=%s filled=%s avg=%s fee=%s",
                                         mode.upper(), okx_order.get("id"), okx_order.get("status"),
@@ -1199,10 +1314,20 @@ class BotManager:
                                     okx_order = self._reconcile_order(ccxt_inst, okx_order, ccxt_symbol)
                                     filled_qty = float(okx_order.get("filled") or 0)
                                     if filled_qty <= 0 and okx_order.get("status") != "closed":
-                                        logger.warning("%s SELL unfilled (status=%s). Recording as canceled.", mode.upper(), okx_order.get("status"))
-                                        db.add(Order(position_id=pos.id, exchange=exchange, bot_name=bot.name, mode=mode, symbol=symbol, side="sell", order_type="market", price=ev['price'], amount=close_qty, timestamp=latest_time, exchange_order_id=okx_order.get("id"), status="canceled"))
+                                        if self._cancel_unfilled_order(ccxt_inst, okx_order.get("id"), ccxt_symbol):
+                                            logger.warning("%s SELL unfilled (status=%s), canceled on exchange.", mode.upper(), okx_order.get("status"))
+                                            db.add(Order(position_id=pos.id, exchange=exchange, bot_name=bot.name, mode=mode, symbol=symbol, side="sell", order_type="market", price=ev['price'], amount=close_qty, timestamp=latest_time, exchange_order_id=okx_order.get("id"), status="canceled"))
+                                            db.commit()
+                                            continue
+                                        # Cancel did not go through: the sell may still fill on
+                                        # the exchange. Keep the position amount untouched and
+                                        # stop the bot — a second sell here could double-sell.
+                                        logger.error("%s SELL state unknown for %s (id=%s) — stopping bot '%s'", mode.upper(), symbol, okx_order.get("id"), bot.name)
+                                        blb.push(bot.name, "ERROR", f"Order state unknown on {symbol} — verify manually on the exchange before restarting")
+                                        db.add(Order(position_id=pos.id, exchange=exchange, bot_name=bot.name, mode=mode, symbol=symbol, side="sell", order_type="market", price=ev['price'], amount=close_qty, timestamp=latest_time, exchange_order_id=okx_order.get("id"), status="unknown"))
+                                        bot.is_active = False
                                         db.commit()
-                                        continue
+                                        break
                                     # Book only what actually sold so a partial fill
                                     # reduces the position pro rata instead of being
                                     # retried for the full amount later

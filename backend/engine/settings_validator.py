@@ -1,9 +1,12 @@
 import logging
+import re
 
 from backend.core.exchange_registry import get_exchange_timeframes
 from backend.engine.evaluator import ALLOWED_INDICATOR_METHODS
 
 logger = logging.getLogger("apexalgo.settings_validator")
+SYMBOL_PATTERN = re.compile(r'^[A-Z0-9]+/[A-Z0-9]+$')
+MAX_PRICE_OFFSET = 500
 VALID_EXIT_TYPES = {'percentage', 'trailing', 'atr', 'fixed'}
 VALID_AMOUNT_TYPES = {'percentage', 'fixed'}
 VALID_CLOSE_AMOUNT_TYPES = {'percentage', 'fixed'}
@@ -30,13 +33,26 @@ def validate_bot_settings(settings: dict, exchange_id: str | None = None) -> dic
     warnings = []
     nodes = settings.get("nodes", {})
 
-    # Symbols
+    # Symbols — normalize and validate BASE/QUOTE format, write back normalized values
     symbols = settings.get("symbols", [])
-    if not symbols:
+    if symbols:
+        normalized_symbols = []
+        for sym in symbols:
+            norm = str(sym).strip().upper().replace('-', '/')
+            if not SYMBOL_PATTERN.match(norm):
+                errors.append(f"Invalid symbol '{sym}'. Use BASE/QUOTE, e.g. BTC/USDC.")
+            normalized_symbols.append(norm)
+        settings["symbols"] = normalized_symbols
+    else:
         if settings.get("symbol"):
             warnings.append("Using single 'symbol' field; consider using 'symbols' list.")
         else:
             errors.append("No trading symbols configured.")
+    if settings.get("symbol"):
+        norm = str(settings["symbol"]).strip().upper().replace('-', '/')
+        if not SYMBOL_PATTERN.match(norm):
+            errors.append(f"Invalid symbol '{settings['symbol']}'. Use BASE/QUOTE, e.g. BTC/USDC.")
+        settings["symbol"] = norm
 
     # Timeframe — validated against the exchange's supported timeframes
     tf = settings.get("timeframe")
@@ -55,6 +71,8 @@ def validate_bot_settings(settings: dict, exchange_id: str | None = None) -> dic
         errors.append(f"exit_node '{exit_node}' not found in nodes.")
     if not entry_node and not exit_node:
         warnings.append("No entry_node or exit_node configured. Bot will not generate signals.")
+    if exit_node and not entry_node:
+        warnings.append("exit_node is configured without an entry_node; bot will never buy.")
 
     # Max positions
     max_pos = settings.get("max_positions", 1)
@@ -74,6 +92,15 @@ def validate_bot_settings(settings: dict, exchange_id: str | None = None) -> dic
             price_type = node.get("type", "close")
             if price_type not in VALID_PRICE_TYPES:
                 errors.append(f"Node '{node_id}': invalid price type '{price_type}'.")
+            try:
+                offset = int(node.get("offset", 0))
+            except (ValueError, TypeError):
+                errors.append(f"Node '{node_id}': offset '{node.get('offset')}' is not a valid integer.")
+            else:
+                if offset < 0:
+                    errors.append(f"Node '{node_id}': negative offset ({offset}) would reference future candles (look-ahead).")
+                elif offset > MAX_PRICE_OFFSET:
+                    errors.append(f"Node '{node_id}': offset {offset} exceeds the maximum of {MAX_PRICE_OFFSET}.")
 
         elif node_class == "condition":
             op = node.get("operator")
@@ -139,6 +166,22 @@ def validate_bot_settings(settings: dict, exchange_id: str | None = None) -> dic
     # API execution
     if settings.get("api_execution") and not settings.get("api_key_name"):
         errors.append("api_execution is enabled but no api_key_name specified.")
+
+    if settings.get("api_execution") and settings.get("api_key_name"):
+        try:
+            max_order_value = float(settings.get("max_order_value") or 0)
+        except (ValueError, TypeError):
+            max_order_value = 0
+        if max_order_value <= 0:
+            errors.append("Live execution requires max_order_value > 0 as a safety cap.")
+
+    if settings.get("api_execution"):
+        try:
+            entry_fee = float(entry_ts.get("fee") or 0)
+        except (ValueError, TypeError):
+            entry_fee = 0
+        if entry_fee <= 0:
+            warnings.append("Backtest without fees is optimistic; set your exchange's real fee in trade_settings.entry.fee.")
 
     # API key reference reminder
     if settings.get("api_key_name"):

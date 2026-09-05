@@ -166,14 +166,14 @@ def create_bot(bot_in: BotCreate, db: Session = Depends(get_db)):
 
 @router.post("/import")
 def import_bot(payload: dict = Body(...), db: Session = Depends(get_db)):
-    try:
-        bot_data = payload.get("bot")
-        if not bot_data:
-            raise HTTPException(status_code=400, detail="Invalid file: missing 'bot' key.")
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid bot file format.")
+    bot_data = payload.get("bot")
+    if not isinstance(bot_data, dict):
+        raise HTTPException(status_code=400, detail="Invalid file: 'bot' must be an object.")
 
-    name = bot_data.get("name", "Imported Bot")
+    name = bot_data.get("name") or "Imported Bot"
+    if not isinstance(name, str):
+        raise HTTPException(status_code=400, detail="Invalid file: bot name must be a string.")
+    name = name.strip()[:100] or "Imported Bot"
     if db.query(BotConfig).filter(BotConfig.name == name).first():
         base = f"{name} (imported)"
         name = base
@@ -183,6 +183,8 @@ def import_bot(payload: dict = Body(...), db: Session = Depends(get_db)):
             suffix += 1
 
     bot_settings = bot_data.get("settings", {})
+    if not isinstance(bot_settings, dict):
+        raise HTTPException(status_code=400, detail="Invalid file: bot settings must be an object.")
     resolved_exchange = _resolve_exchange(bot_settings, db)
     validation = validate_bot_settings(bot_settings, exchange_id=resolved_exchange)
     if validation["errors"]:
@@ -192,7 +194,7 @@ def import_bot(payload: dict = Body(...), db: Session = Depends(get_db)):
         name=name,
         is_sandbox=bot_data.get("is_sandbox", True),
         strategy=bot_data.get("strategy", "node_evaluator"),
-        settings=bot_data.get("settings", {}),
+        settings=bot_settings,
         is_active=False
     )
     db.add(new_bot)
@@ -260,10 +262,10 @@ async def flush_bot_data(bot_name: str):
     def _flush():
         db = SessionLocal()
         try:
-            db.query(Signal).filter(Signal.bot_name == bot_name).delete(synchronize_session=False)
-            db.query(Order).filter(Order.bot_name == bot_name, Order.mode == "backtest").delete(synchronize_session=False)
-            db.query(Position).filter(Position.bot_name == bot_name, Position.mode == "backtest").delete(synchronize_session=False)
-            db.commit()
+            _chunked_delete(db, "signals", "bot_name = :bot_name", {"bot_name": bot_name})
+            bt_params = {"bot_name": bot_name, "mode": "backtest"}
+            _chunked_delete(db, "orders", "bot_name = :bot_name AND mode = :mode", bt_params)
+            _chunked_delete(db, "positions", "bot_name = :bot_name AND mode = :mode", bt_params)
         except Exception as e:
             logger.error("Failed to flush bot data for '%s': %s", bot_name, e)
             db.rollback()
@@ -272,15 +274,30 @@ async def flush_bot_data(bot_name: str):
 
     await asyncio.to_thread(_flush)
 
+def _chunked_delete(db: Session, table: str, where: str, params: dict, chunk_size: int = 20000) -> int:
+    """Delete rows in small batches with a commit per chunk so the write lock
+    is released between chunks and concurrent writers (e.g. backfill) can proceed."""
+    total = 0
+    while True:
+        result = db.execute(
+            text(f"DELETE FROM {table} WHERE rowid IN (SELECT rowid FROM {table} WHERE {where} LIMIT {chunk_size})"),
+            params,
+        )
+        db.commit()
+        if result.rowcount <= 0:
+            break
+        total += result.rowcount
+    return total
+
 def _cleanup_bot_data(bot_name: str):
     """Background task: delete all trade data and logs for a removed bot."""
     db = SessionLocal()
+    params = {"bot_name": bot_name}
     try:
-        db.query(Order).filter(Order.bot_name == bot_name).delete()
-        db.query(Position).filter(Position.bot_name == bot_name).delete()
-        db.query(Signal).filter(Signal.bot_name == bot_name).delete()
-        db.query(BotLog).filter(BotLog.bot_name == bot_name).delete()
-        db.commit()
+        _chunked_delete(db, "orders", "bot_name = :bot_name", params)
+        _chunked_delete(db, "positions", "bot_name = :bot_name", params)
+        _chunked_delete(db, "signals", "bot_name = :bot_name", params)
+        _chunked_delete(db, "bot_logs", "bot_name = :bot_name", params)
     except Exception as e:
         db.rollback()
         logger.error("Background cleanup failed for '%s': %s", bot_name, e)

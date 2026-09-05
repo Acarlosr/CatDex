@@ -75,8 +75,11 @@ def build_exchange(
     if sandbox:
         try:
             exchange.set_sandbox_mode(True)
-        except Exception:
-            logger.debug("Exchange '%s' does not support sandbox mode.", exchange_id)
+        except Exception as exc:
+            raise ValueError(
+                f"Exchange '{exchange_id}' has no sandbox/testnet — "
+                "cannot use this key in sandbox mode"
+            ) from exc
 
     return exchange
 

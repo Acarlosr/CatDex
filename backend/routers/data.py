@@ -6,7 +6,7 @@ import asyncio
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from backend.core.database import get_db, SessionLocal
@@ -248,34 +248,52 @@ def delete_data(
     db: Session = Depends(get_db)
 ):
     formatted_symbol = symbol.replace('-', '/').upper()
-    query = db.query(Candle).filter(Candle.symbol == formatted_symbol)
+    where = "symbol = :symbol"
+    params = {"symbol": formatted_symbol}
 
     if exchange:
-        query = query.filter(Candle.exchange == exchange.lower())
+        where += " AND exchange = :exchange"
+        params["exchange"] = exchange.lower()
     if timeframe:
-        query = query.filter(Candle.timeframe == timeframe)
+        where += " AND timeframe = :timeframe"
+        params["timeframe"] = timeframe
     if before_date:
         try:
             date_limit = datetime.fromisoformat(before_date.replace('Z', '+00:00'))
-            query = query.filter(Candle.timestamp < date_limit)
+            where += " AND timestamp < :before"
+            params["before"] = date_limit
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format. Use ISO 8601.")
 
-    deleted_count = query.delete()
-    db.commit()
-    return {"message": f"Deleted {deleted_count} historical candles."}
+    # Delete in chunks with a commit per chunk so the write lock is released
+    # between batches and concurrent backfill commits are not starved.
+    deleted_count = 0
+    while True:
+        result = db.execute(
+            text(f"DELETE FROM candles WHERE rowid IN (SELECT rowid FROM candles WHERE {where} LIMIT 20000)"),
+            params,
+        )
+        db.commit()
+        if result.rowcount <= 0:
+            break
+        deleted_count += result.rowcount
+
+    return {"message": f"Deleted {deleted_count} historical candles.", "deleted": deleted_count}
 
 
 @router.get("/candles/{symbol}")
 def get_candles(
     symbol: str,
-    limit: Optional[int] = Query(default=None, le=100000),
+    limit: int = Query(default=50000, le=100000),
     exchange: Optional[str] = None,
     x_timeframe: str = Header(...),
     db: Session = Depends(get_db)
 ):
+    if limit <= 0:
+        limit = 50000
     formatted_symbol = symbol.replace('-', '/').upper()
-    # Use raw column query (no ORM object hydration) for speed with large datasets
+    # Use raw column query (no ORM object hydration) for speed with large datasets;
+    # fetch the most recent N candles (DESC then reverse)
     query = db.query(
         Candle.timestamp, Candle.open, Candle.high, Candle.low, Candle.close, Candle.volume
     ).filter(
@@ -284,22 +302,8 @@ def get_candles(
     )
     if exchange:
         query = query.filter(Candle.exchange == exchange.lower())
-    query = query.order_by(Candle.timestamp.asc())
-    if limit:
-        # When limited, fetch the most recent N candles (DESC then reverse)
-        query = db.query(
-            Candle.timestamp, Candle.open, Candle.high, Candle.low, Candle.close, Candle.volume
-        ).filter(
-            Candle.symbol == formatted_symbol,
-            Candle.timeframe == x_timeframe,
-        )
-        if exchange:
-            query = query.filter(Candle.exchange == exchange.lower())
-        query = query.order_by(Candle.timestamp.desc()).limit(limit)
-        rows = query.all()
-        rows.reverse()
-    else:
-        rows = query.all()
+    rows = query.order_by(Candle.timestamp.desc()).limit(limit).all()
+    rows.reverse()
 
     return [
         {

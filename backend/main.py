@@ -60,10 +60,7 @@ app = FastAPI(
     openapi_url="/openapi.json" if enable_docs else None,
 )
 
-DEFAULT_CORS_ORIGINS = (
-    "https://localhost:5173,https://127.0.0.1:5173,"
-    "http://localhost:5173,http://127.0.0.1:5173"
-)
+DEFAULT_CORS_ORIGINS = "https://localhost:5173,https://127.0.0.1:5173"
 cors_origins = [
     origin.strip()
     for origin in os.getenv("CORS_ORIGINS", DEFAULT_CORS_ORIGINS).split(",")
@@ -105,4 +102,5 @@ def get_price(symbol: str, exchange: str = Query(default="okx")):
             "timestamp": ticker['datetime']
         }
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to fetch price: {str(e)}")
+        logging.getLogger("apexalgo.main").warning("Failed to fetch price for '%s' on '%s': %s", symbol, exchange, e)
+        raise HTTPException(status_code=400, detail="Failed to fetch price from the exchange.")

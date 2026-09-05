@@ -2,7 +2,7 @@ import logging
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import func as sql_func
+from sqlalchemy import func as sql_func, text
 import io
 import csv
 import math
@@ -31,6 +31,22 @@ def _invalidate_drawdown_cache(bot_names):
     for key in [k for k in list(cache) if isinstance(k, tuple) and k and k[0] in names]:
         cache.pop(key, None)
 
+def _chunked_delete(db: Session, table: str, where: str, params: dict, chunk_size: int = 20000) -> int:
+    """Delete rows in small batches with a commit per chunk so the write lock
+    is released between chunks and concurrent writers (e.g. backfill) can proceed."""
+    total = 0
+    while True:
+        result = db.execute(
+            text(f"DELETE FROM {table} WHERE rowid IN (SELECT rowid FROM {table} WHERE {where} LIMIT {chunk_size})"),
+            params,
+        )
+        db.commit()
+        if result.rowcount <= 0:
+            break
+        total += result.rowcount
+    return total
+
+
 router = APIRouter(
     prefix="/api/trades",
     tags=["Trades"],
@@ -51,8 +67,7 @@ def get_positions(symbol: str = None, mode: str = None, status: str = None, limi
     if mode: query = query.filter(Position.mode == mode)
     if status: query = query.filter(Position.status == status)
     query = query.order_by(Position.created_at.desc())
-    if limit > 0:
-        query = query.limit(limit)
+    query = query.limit(limit if limit > 0 else 50000)
     return [
         {"id": r[0], "exchange": r[1], "bot_name": r[2], "symbol": r[3],
          "mode": r[4], "status": r[5], "side": r[6], "entry_price": r[7],
@@ -74,8 +89,7 @@ def get_orders(symbol: str = None, mode: str = None, limit: int = Query(default=
         query = query.filter(Order.symbol == formatted_symbol)
     if mode: query = query.filter(Order.mode == mode)
     query = query.order_by(Order.timestamp.desc())
-    if limit > 0:
-        query = query.limit(limit)
+    query = query.limit(limit if limit > 0 else 50000)
     return [
         {"id": r[0], "position_id": r[1], "exchange": r[2], "bot_name": r[3],
          "mode": r[4], "symbol": r[5], "side": r[6], "order_type": r[7],
@@ -170,17 +184,14 @@ def get_trade_stats(
 
 @router.delete("/bot/{bot_name}")
 def delete_bot_trades(bot_name: str, mode: Optional[str] = None, db: Session = Depends(get_db)):
-    order_query = db.query(Order).filter(Order.bot_name == bot_name)
-    pos_query = db.query(Position).filter(Position.bot_name == bot_name)
-
+    where = "bot_name = :bot_name"
+    params = {"bot_name": bot_name}
     if mode:
-        order_query = order_query.filter(Order.mode == mode)
-        pos_query = pos_query.filter(Position.mode == mode)
+        where += " AND mode = :mode"
+        params["mode"] = mode
 
-    orders_deleted = order_query.delete(synchronize_session=False)
-    pos_deleted = pos_query.delete(synchronize_session=False)
-
-    db.commit()
+    orders_deleted = _chunked_delete(db, "orders", where, params)
+    pos_deleted = _chunked_delete(db, "positions", where, params)
     _invalidate_drawdown_cache([bot_name])
     return {"message": f"Deleted {orders_deleted} orders and {pos_deleted} positions for '{bot_name}' in mode: {mode or 'ALL'}."}
 
@@ -249,18 +260,70 @@ def _execute_live_close(pos: Position, db: Session):
         logger.error("Live close order failed for position %d (%s %s): %s", pos.id, close_side, ccxt_symbol, e, exc_info=True)
         raise HTTPException(status_code=502, detail="Exchange rejected the close order. Position remains open.")
 
-    if exch_order.get("status") != "closed":
-        logger.warning("Live close order for position %d not filled (status=%s)", pos.id, exch_order.get("status"))
-        raise HTTPException(status_code=502, detail="Close order was not filled on the exchange. Position remains open.")
+    # Market orders often report status open/None right after creation even though
+    # they fill (near-)immediately — poll the exchange for the real fill state.
+    exch_order = bot_manager._reconcile_order(exchange, exch_order, ccxt_symbol)
+    order_id = exch_order.get("id")
+    order_status = exch_order.get("status")
+    filled_amount = float(exch_order.get("filled") or 0)
+
+    if filled_amount <= 0:
+        if order_status not in ("closed", "canceled", "rejected", "expired") and order_id:
+            try:
+                exchange.cancel_order(order_id, ccxt_symbol)
+                order_status = "canceled"
+            except Exception as cancel_exc:
+                logger.error("Could not cancel unfilled close order %s for position %d: %s", order_id, pos.id, cancel_exc)
+        logger.warning("Live close order %s for position %d not filled (status=%s)", order_id, pos.id, order_status)
+        _record_unfilled_close_order(db, pos, close_side, order_id, order_status)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Close order was not filled on the exchange (order {order_id or 'unknown'}, status {order_status or 'unknown'}). Position remains open.",
+        )
+
+    if order_status != "closed" and order_id:
+        # Partially filled and still resting — cancel the remainder, keep the fill
+        try:
+            exchange.cancel_order(order_id, ccxt_symbol)
+        except Exception as cancel_exc:
+            logger.warning("Could not cancel remainder of close order %s for position %d: %s", order_id, pos.id, cancel_exc)
 
     fill_price = exch_order.get("average") or exch_order.get("price")
     if not fill_price:
         latest_candle = db.query(Candle).filter(Candle.symbol == pos.symbol, Candle.exchange == (pos.exchange or "okx")).order_by(Candle.timestamp.desc()).first()
         fill_price = latest_candle.close if latest_candle else pos.entry_price
 
-    filled_amount = float(exch_order.get("filled") or close_qty)
-    exit_fee = float((exch_order.get("fee") or {}).get("cost", 0) or 0)
-    return float(fill_price), filled_amount, exit_fee, exch_order.get("id")
+    exit_fee = bot_manager._fee_in_quote(exch_order.get("fee"), ccxt_symbol, fill_price)
+    return float(fill_price), filled_amount, exit_fee, order_id
+
+
+def _record_unfilled_close_order(db: Session, pos: Position, close_side: str, order_id, order_status):
+    """Persist a DB trace for a close order that did not fill, and reopen the
+    position so the whole attempt never leaves an exchange order without a record."""
+    try:
+        db.rollback()
+        db.query(Position).filter(Position.id == pos.id, Position.status == "closing").update(
+            {"status": "open"}, synchronize_session=False
+        )
+        db.add(Order(
+            position_id=pos.id,
+            exchange=pos.exchange,
+            bot_name=pos.bot_name,
+            mode=pos.mode,
+            symbol=pos.symbol,
+            side=close_side,
+            order_type="market",
+            price=None,
+            amount=0.0,
+            fee=0.0,
+            timestamp=datetime.now(timezone.utc),
+            exchange_order_id=order_id,
+            status=order_status or "unknown",
+        ))
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.error("Failed to record unfilled close order %s for position %d: %s", order_id, pos.id, exc)
 
 
 @router.post("/positions/{position_id}/close")

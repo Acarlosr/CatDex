@@ -190,6 +190,21 @@ class CandlePoller:
 
         db: Session = SessionLocal()
         try:
+            # Resume from the newest stored candle instead of re-fetching the
+            # whole lookback window on every reconnect
+            last_existing = db.query(Candle.timestamp).filter(
+                Candle.exchange == exchange_name,
+                Candle.symbol == symbol,
+                Candle.timeframe == timeframe,
+            ).order_by(Candle.timestamp.desc()).first()
+            if last_existing:
+                last_dt = last_existing[0]
+                if last_dt.tzinfo is None:
+                    last_dt = last_dt.replace(tzinfo=timezone.utc)
+                resume_since = int(last_dt.timestamp() * 1000) + tf_ms
+                if resume_since > current_since:
+                    current_since = resume_since
+
             while total_saved < lookback_limit:
                 batch = None
                 for attempt in range(3):
@@ -353,20 +368,33 @@ class CandlePoller:
             exchange_name, symbol, timeframe, poll_interval,
         )
 
-        def _fetch():
+        tf_ms = tf_seconds * 1000
+
+        def _fetch(limit):
             # Re-resolve from the cache every call so the TTL rebuild takes effect,
             # and hold the per-exchange lock: sync CCXT instances are not thread-safe.
             inst, lock = self._get_public_exchange(exchange_name)
             with lock:
-                return inst.fetch_ohlcv(symbol, timeframe, None, 2)
+                return inst.fetch_ohlcv(symbol, timeframe, None, limit)
 
         while self.running and not self.needs_reconnect:
             try:
-                candles = await asyncio.to_thread(_fetch)
+                # After downtime the gap can span multiple candles; widen the
+                # fetch so none are missed
+                fetch_limit = 2
+                if last_closed_ts is not None:
+                    now_ms = int(time.time() * 1000)
+                    gap_ms = now_ms - last_closed_ts
+                    if gap_ms > 2 * tf_ms:
+                        fetch_limit = int(min(gap_ms // tf_ms + 2, 300))
+
+                candles = await asyncio.to_thread(_fetch, fetch_limit)
                 if len(candles) >= 2:
-                    closed = candles[-2]  # penultimate = most recently closed candle
-                    closed_ts = int(closed[0])
-                    if last_closed_ts != closed_ts:
+                    # Every candle except the last (still forming) is closed
+                    for closed in candles[:-1]:
+                        closed_ts = int(closed[0])
+                        if last_closed_ts is not None and closed_ts <= last_closed_ts:
+                            continue
                         await self._save_and_notify(exchange_name, symbol, timeframe, closed)
                         last_closed_ts = closed_ts
                         self._last_closed_ts[sub_key] = closed_ts
@@ -423,13 +451,17 @@ class CandlePoller:
                     existing.close  = float(candle_data[4])
                     existing.volume = float(candle_data[5])
                 db.commit()
+                return True
             except Exception as exc:
                 db.rollback()
                 logger.warning("Failed to save candle %s/%s: %s", symbol, timeframe, exc)
+                return False
             finally:
                 db.close()
 
-        await asyncio.to_thread(db_op)
+        saved = await asyncio.to_thread(db_op)
+        if not saved:
+            return
         await event_bus.publish("CANDLE_CLOSED", {
             "exchange":  exchange_name,
             "symbol":    symbol,
