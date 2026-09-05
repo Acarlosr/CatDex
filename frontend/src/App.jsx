@@ -272,7 +272,7 @@ export default function App() {
         {error && (
           <div className="absolute top-16 left-1/2 transform -translate-x-1/2 p-3 bg-danger/10 backdrop-blur-xl border border-danger/50 text-danger text-xs md:text-sm rounded-md shadow-pop flex justify-between items-center z-[100] min-w-[300px] fade-in">
             <span>{error}</span>
-            <button aria-label="Dismiss error" className="text-danger hover:text-white ml-4 font-bold" onClick={() => setError(null)}>✕</button>
+            <button aria-label="Dismiss error" className="text-danger hover:text-text ml-4 font-bold" onClick={() => setError(null)}>✕</button>
           </div>
         )}
 

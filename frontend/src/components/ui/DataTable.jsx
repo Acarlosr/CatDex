@@ -44,7 +44,7 @@ const DataTable = ({ columns, data, emptyMessage = 'No data available', emptySta
               <tr
                 key={row.id ?? i}
                 onClick={onRowClick ? () => onRowClick(row) : undefined}
-                className={`group transition-colors duration-100 hover:bg-white/[0.025] ${onRowClick ? 'cursor-pointer' : ''}`}
+                className={`group transition-colors duration-100 hover:bg-text/[0.03] ${onRowClick ? 'cursor-pointer' : ''}`}
               >
                 {columns.map((col) => (
                   <td

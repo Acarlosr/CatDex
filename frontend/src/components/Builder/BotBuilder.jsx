@@ -4,6 +4,7 @@ import 'reactflow/dist/style.css';
 import { BotConfigNode, WhitelistNode, BacktestNode, ApiKeyNode, IndicatorNode, ConditionNode, LogicNode, StopLossNode, TakeProfitNode, ActionNode, PriceDataNode } from './CustomNodes';
 import { apiClient } from '../../api/client';
 import { humanizeApiError } from '../../api/errors';
+import { getToken } from '../../theme';
 import Button from '../ui/Button';
 import { toast } from '../ui/Toast';
 
@@ -37,8 +38,8 @@ const parseSafeFloat = (val) => {
 function rebuildLayoutFromSettings(settings, updateNodeData, deleteNode) {
     const nodes = [];
     const edges = [];
-    // Raw hex required by ReactFlow edge style — mirrors the muted CSS token
-    const edgeStyle = { stroke: '#848e9c', strokeWidth: 2 };
+    // CSS var resolves at render time, so edges follow the active theme
+    const edgeStyle = { stroke: 'var(--color-muted)', strokeWidth: 2 };
     const GAP = 50; // universal gap between nodes
 
     // ── Measured rendered widths and heights from CSS width + content ──
@@ -328,8 +329,23 @@ const BotBuilderFlow = ({ closeBuilder, editingBot }) => {
       }));
   }, [supportedTimeframes, setNodes]);
 
-  const onConnect = useCallback((params) => setEdges((eds) => addEdge({ ...params, animated: true, style: { stroke: '#848e9c', strokeWidth: 2 } }, eds)), [setEdges]);
+  const onConnect = useCallback((params) => setEdges((eds) => addEdge({ ...params, animated: true, style: { stroke: 'var(--color-muted)', strokeWidth: 2 } }, eds)), [setEdges]);
   const onDragOver = useCallback((event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }, []);
+
+  // Background dots + MiniMap node/mask colors are painted into SVG/canvas
+  // attributes where CSS vars don't resolve — read the live tokens and
+  // re-render when the theme flips.
+  const [themeTick, setThemeTick] = useState(0);
+  useEffect(() => {
+      const onTheme = () => setThemeTick(t => t + 1);
+      window.addEventListener('apex-theme-changed', onTheme);
+      return () => window.removeEventListener('apex-theme-changed', onTheme);
+  }, []);
+  const canvasColors = React.useMemo(() => ({
+      dots: getToken('border'),
+      node: getToken('muted'),
+      mask: getToken('bg'),
+  }), [themeTick]); // eslint-disable-line react-hooks/exhaustive-deps -- themeTick invalidates the getToken reads
 
   const getDefaultData = useCallback((type) => {
       const defaultData = { onChange: updateNodeData, onDelete: deleteNode };
@@ -718,12 +734,13 @@ const BotBuilderFlow = ({ closeBuilder, editingBot }) => {
           fitView
           attributionPosition="bottom-right"
         >
-          {/* Raw hex required by ReactFlow props — values mirror the CSS tokens
-              (raised #12151c, border #202532, muted #848e9c, bg #080a0f) */}
-          <Background color="#1f2329" gap={20} size={2} />
+          {/* Background/MiniMap paint into SVG/canvas attributes, so their
+              colors are resolved from the live tokens via getToken and
+              refreshed by the apex-theme-changed re-render (themeTick) */}
+          <Background color={canvasColors.dots} gap={20} size={2} />
           {/* Offset controls upward on mobile to clear the bottom nav bar */}
-          <Controls style={{ display: 'flex', flexDirection: 'column', backgroundColor: '#12151c', border: '1px solid #202532', borderRadius: '8px', overflow: 'hidden', position: 'absolute', bottom: window.innerWidth < 768 ? '70px' : '20px', left: '20px', boxShadow: '0 4px 24px rgba(0,0,0,0.3)' }} />
-          <MiniMap nodeColor={() => '#848e9c'} maskColor="#080a0f" style={{ backgroundColor: '#12151c', border: '1px solid #202532', borderRadius: '8px', display: window.innerWidth < 768 ? 'none' : 'block', boxShadow: '0 4px 24px rgba(0,0,0,0.3)' }} />
+          <Controls style={{ display: 'flex', flexDirection: 'column', backgroundColor: 'var(--color-raised)', border: '1px solid var(--color-border)', borderRadius: '8px', overflow: 'hidden', position: 'absolute', bottom: window.innerWidth < 768 ? '70px' : '20px', left: '20px', boxShadow: 'var(--shadow-card)' }} />
+          <MiniMap nodeColor={() => canvasColors.node} maskColor={canvasColors.mask} style={{ backgroundColor: 'var(--color-raised)', border: '1px solid var(--color-border)', borderRadius: '8px', display: window.innerWidth < 768 ? 'none' : 'block', boxShadow: 'var(--shadow-card)' }} />
         </ReactFlow>
       </div>
     </div>

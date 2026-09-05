@@ -79,9 +79,8 @@ const EquityCurve = ({ data }) => {
     ].join(' ');
 
     const lastVal = data[data.length - 1].value;
-    // Raw hex required inside SVG attributes — values mirror the CSS tokens
-    // success #2ebd85, danger #f6465d, border #202532, muted #848e9c
-    const lineClr = lastVal >= 0 ? '#2ebd85' : '#f6465d';
+    // CSS vars work in SVG style props (not attributes), so paint via style
+    const lineClr = lastVal >= 0 ? 'var(--color-success)' : 'var(--color-danger)';
     const gradId = lastVal >= 0 ? 'ecGreen' : 'ecRed';
 
     const firstDate = data[0].date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
@@ -91,22 +90,22 @@ const EquityCurve = ({ data }) => {
         <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-full" preserveAspectRatio="none">
             <defs>
                 <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor={lineClr} stopOpacity="0.25" />
-                    <stop offset="100%" stopColor={lineClr} stopOpacity="0.01" />
+                    <stop offset="0%" style={{ stopColor: lineClr, stopOpacity: 0.25 }} />
+                    <stop offset="100%" style={{ stopColor: lineClr, stopOpacity: 0.01 }} />
                 </linearGradient>
             </defs>
             {/* Zero baseline */}
             <line x1={PAD.l} y1={zeroY} x2={W - PAD.r} y2={zeroY}
-                stroke="#202532" strokeWidth="1" strokeDasharray="3,4" />
+                style={{ stroke: 'var(--color-border)' }} strokeWidth="1" strokeDasharray="3,4" />
             {/* Area fill */}
             <path d={areaPath} fill={`url(#${gradId})`} />
             {/* Line */}
-            <polyline points={points} fill="none" stroke={lineClr} strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" />
+            <polyline points={points} fill="none" style={{ stroke: lineClr }} strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" />
             {/* End dot */}
-            <circle cx={xS(data.length - 1)} cy={yS(lastVal)} r="2.5" fill={lineClr} />
+            <circle cx={xS(data.length - 1)} cy={yS(lastVal)} r="2.5" style={{ fill: lineClr }} />
             {/* Date labels */}
-            <text x={PAD.l} y={H - 4} fill="#848e9c" fontSize="10" fontFamily="JetBrains Mono, monospace">{firstDate}</text>
-            <text x={W - PAD.r} y={H - 4} fill="#848e9c" fontSize="10" fontFamily="JetBrains Mono, monospace" textAnchor="end">{lastDate}</text>
+            <text x={PAD.l} y={H - 4} style={{ fill: 'var(--color-muted)' }} fontSize="10" fontFamily="JetBrains Mono, monospace">{firstDate}</text>
+            <text x={W - PAD.r} y={H - 4} style={{ fill: 'var(--color-muted)' }} fontSize="10" fontFamily="JetBrains Mono, monospace" textAnchor="end">{lastDate}</text>
         </svg>
     );
 };
@@ -770,7 +769,7 @@ export default function TradeManager({ setError, bots = [] }) {
                                     const pnl = getLivePnl(pos);
                                     const hasPrice = !!livePrices[pos.symbol];
                                     return (
-                                        <tr key={pos.id} className="border-b border-border/40 hover:bg-white/[0.025] transition-colors">
+                                        <tr key={pos.id} className="border-b border-border/40 hover:bg-text/[0.03] transition-colors">
                                             <td className="px-4 py-3 font-bold text-text">
                                                 <span className="align-middle">{pos.bot_name}</span>
                                                 <Badge variant={MODE_BADGE_VARIANT[pos.mode] || 'neutral'} className="ml-2 text-[8px]!">{pos.mode}</Badge>
@@ -875,7 +874,7 @@ export default function TradeManager({ setError, bots = [] }) {
                                         })();
                                         const posFees = feesByPosId[pos.id] || 0;
                                         return (
-                                            <tr key={pos.id} className="border-b border-border/40 hover:bg-white/[0.025] transition-colors group">
+                                            <tr key={pos.id} className="border-b border-border/40 hover:bg-text/[0.03] transition-colors group">
                                                 <td className="px-4 py-2.5 font-num text-muted text-[10px]">
                                                     {pos.closed_at ? new Date(pos.closed_at).toLocaleString() : '—'}
                                                 </td>
@@ -962,7 +961,7 @@ export default function TradeManager({ setError, bots = [] }) {
                                 </thead>
                                 <tbody className="text-[11px]">
                                     {renderedOrders.map(order => (
-                                        <tr key={order.id} className="border-b border-border/40 hover:bg-white/[0.025] transition-colors">
+                                        <tr key={order.id} className="border-b border-border/40 hover:bg-text/[0.03] transition-colors">
                                             <td className="px-4 py-2.5 font-num text-muted text-[10px]">{new Date(order.timestamp).toLocaleString()}</td>
                                             <td className="px-4 py-2.5 font-bold text-text">
                                                 <span className="align-middle">{order.bot_name}</span>

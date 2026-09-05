@@ -11,13 +11,14 @@
  * Usage:
  *   <StatCard label="Win rate" value="63.4%" color="green" sub="142 trades" />
  */
+// CSS vars resolve at paint time — accents follow the active theme
 const COLORS = {
-  gold: '#fcd535',
-  cyan: '#0ea5e9',
-  green: '#2ebd85',
-  red: '#f6465d',
-  purple: '#8b5cf6',
-  white: '#eaecef',
+  gold: 'var(--color-accent)',
+  cyan: 'var(--color-info)',
+  green: 'var(--color-success)',
+  red: 'var(--color-danger)',
+  purple: 'var(--color-purple)',
+  white: 'var(--color-text)',
 };
 
 const StatCard = ({ label, value, color = 'gold', sub, icon }) => {

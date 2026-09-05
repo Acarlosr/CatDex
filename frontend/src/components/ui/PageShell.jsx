@@ -7,10 +7,10 @@
  * @param {React.ReactNode} props.children
  */
 const GLOW_COLORS = {
-  gold: 'rgba(252, 213, 53, 0.05)',
-  cyan: 'rgba(14, 165, 233, 0.05)',
-  green: 'rgba(46, 189, 133, 0.05)',
-  purple: 'rgba(139, 92, 246, 0.05)',
+  gold: 'color-mix(in srgb, var(--color-accent) 5%, transparent)',
+  cyan: 'color-mix(in srgb, var(--color-info) 5%, transparent)',
+  green: 'color-mix(in srgb, var(--color-success) 5%, transparent)',
+  purple: 'color-mix(in srgb, var(--color-purple) 5%, transparent)',
 };
 
 const PageShell = ({ children, glowColor = 'gold' }) => (

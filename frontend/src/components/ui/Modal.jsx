@@ -18,11 +18,13 @@
 import { useEffect } from 'react';
 import Button from './Button';
 
+// Inline-style colors read the live tokens so both themes work
+const mix = (token, pct) => `color-mix(in srgb, var(--color-${token}) ${pct}%, transparent)`;
 const TYPE_COLORS = {
-  danger: { accent: '#f6465d', bg: 'rgba(246, 70, 93, 0.08)', variant: 'danger' },
-  warning: { accent: '#fcd535', bg: 'rgba(252, 213, 53, 0.08)', variant: 'primary' },
-  success: { accent: '#2ebd85', bg: 'rgba(46, 189, 133, 0.08)', variant: 'success' },
-  info: { accent: '#0ea5e9', bg: 'rgba(14, 165, 233, 0.08)', variant: 'primary' },
+  danger: { accent: 'var(--color-danger)', bg: mix('danger', 8), variant: 'danger' },
+  warning: { accent: 'var(--color-accent)', bg: mix('accent', 8), variant: 'primary' },
+  success: { accent: 'var(--color-success)', bg: mix('success', 8), variant: 'success' },
+  info: { accent: 'var(--color-info)', bg: mix('info', 8), variant: 'primary' },
 };
 
 const Modal = ({ config, customBody }) => {
@@ -51,7 +53,7 @@ const Modal = ({ config, customBody }) => {
       <div className="relative modal-enter bg-overlay/95 backdrop-blur-xl border border-border rounded-lg max-w-md w-full shadow-pop overflow-hidden">
         <div
           className="absolute top-0 left-0 right-0 h-px"
-          style={{ background: `linear-gradient(90deg, transparent, ${colors.accent}66, transparent)` }}
+          style={{ background: `linear-gradient(90deg, transparent, color-mix(in srgb, ${colors.accent} 40%, transparent), transparent)` }}
         />
         <div className="px-5 py-4 border-b border-border" style={{ background: colors.bg }}>
           <h3 className="text-xs font-bold uppercase tracking-wider" style={{ color: colors.accent }}>

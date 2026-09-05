@@ -55,7 +55,7 @@ export default function ApiKeyGate({ onUnlock, signedOutReason = null }) {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M13 10V3L4 14h7v7l9-11h-7z" />
               </svg>
             </div>
-            <h1 className="text-xl font-bold tracking-[0.25em] uppercase text-white">
+            <h1 className="text-xl font-bold tracking-[0.25em] uppercase text-text">
               Apex<span className="text-accent">Algo</span>
             </h1>
             <p className="text-[10px] text-faint uppercase tracking-[0.2em] font-num mt-1.5">

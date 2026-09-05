@@ -263,7 +263,7 @@ export const ApiKeyNode = ({ id, data }) => {
         </div>
         {derivedExchange ? (
           <div className="flex items-center space-x-2 px-1">
-            <div className="w-1.5 h-1.5 rounded-full bg-success shadow-[0_0_6px_#2ebd85]" />
+            <div className="w-1.5 h-1.5 rounded-full bg-success shadow-[0_0_6px_var(--color-success)]" />
             <span className="text-[10px] text-muted uppercase font-bold">Exchange: <span className="text-success">{derivedExchange.toUpperCase()}</span></span>
           </div>
         ) : (
@@ -538,13 +538,13 @@ export const TakeProfitNode = ({ id, data }) => (
 
 export const ActionNode = ({ id, data }) => {
   const isBuy = data.actionType === 'buy';
-  // Raw hex used in inline styles (border/accent tint) — mirrors success/danger CSS tokens
-  const color = isBuy ? '#2ebd85' : '#f6465d';
+  // CSS var resolves at paint time so the tint follows the active theme
+  const color = isBuy ? 'var(--color-success)' : 'var(--color-danger)';
   
   return (
     <div className={`bg-raised/90 backdrop-blur-xl border-2 rounded-xl shadow-lg min-w-[320px]`} style={{ borderColor: color }}>
       
-      <div className="px-3 py-2 font-bold text-[11px] uppercase tracking-wider border-b flex justify-between items-center" style={{ backgroundColor: `${color}10`, color: color, borderColor: `${color}30` }}>
+      <div className="px-3 py-2 font-bold text-[11px] uppercase tracking-wider border-b flex justify-between items-center" style={{ backgroundColor: `color-mix(in srgb, ${color} 6%, transparent)`, color: color, borderColor: `color-mix(in srgb, ${color} 19%, transparent)` }}>
         <span>{isBuy ? 'ORDER ROUTING: LONG ENTRY' : 'ORDER ROUTING: CLOSE POSITION'}</span>
         {data.onDelete && <button onClick={() => data.onDelete(id)} className="text-muted hover:text-danger transition-colors">✕</button>}
       </div>

@@ -1,3 +1,6 @@
+import { useEffect, useState } from 'react';
+import { getTheme, setTheme } from '../theme';
+
 const NAV_ITEMS = [
   {
     key: 'settings',
@@ -38,6 +41,14 @@ const NAV_ITEMS = [
 ];
 
 export default function Sidebar({ activeView, setActiveView, openCharts, closeChart, runningBots, openBotChart, sidebarOpen, setSidebarOpen, backendOk = true }) {
+  const [theme, setThemeState] = useState(getTheme());
+  useEffect(() => {
+    const sync = () => setThemeState(getTheme());
+    window.addEventListener('apex-theme-changed', sync);
+    return () => window.removeEventListener('apex-theme-changed', sync);
+  }, []);
+  const toggleTheme = () => setTheme(theme === 'dark' ? 'light' : 'dark');
+
   return (
     <aside className={`fixed inset-y-0 left-0 z-[80] w-64 bg-raised/95 backdrop-blur-xl border-r border-border flex flex-col shadow-2xl transform transition-transform duration-300 ease-in-out ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
 
@@ -64,7 +75,7 @@ export default function Sidebar({ activeView, setActiveView, openCharts, closeCh
             </svg>
           </div>
           <div>
-            <h1 className="text-base font-bold tracking-[0.2em] text-white leading-none">
+            <h1 className="text-base font-bold tracking-[0.2em] text-text leading-none">
               APEX<span className="text-accent">ALGO</span>
             </h1>
             <p className="text-faint text-[9px] mt-1 uppercase tracking-wider font-num">Engine Core</p>
@@ -105,7 +116,7 @@ export default function Sidebar({ activeView, setActiveView, openCharts, closeCh
 
         {runningBots && runningBots.length > 0 && (
           <div className="pt-5 pb-2 px-3 flex items-center border-t border-border/50 mt-4">
-            <span className="w-1.5 h-1.5 bg-success rounded-full mr-2 animate-pulse shadow-[0_0_12px_#2ebd85]"></span>
+            <span className="w-1.5 h-1.5 bg-success rounded-full mr-2 animate-pulse shadow-[0_0_12px_var(--color-success)]"></span>
             <span className="text-[9px] font-bold text-faint uppercase tracking-[0.2em]">Live Engines</span>
           </div>
         )}
@@ -150,12 +161,12 @@ export default function Sidebar({ activeView, setActiveView, openCharts, closeCh
       </nav>
 
       {/* Footer status */}
-      <div className="p-3 border-t border-border shrink-0">
+      <div className="p-3 border-t border-border shrink-0 space-y-2">
         <div className="flex items-center justify-between px-2 py-1.5 rounded-md bg-inset/60 border border-border/60">
           <div className="flex items-center gap-2">
             {backendOk ? (
               <>
-                <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse shadow-[0_0_8px_#2ebd85]" />
+                <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse shadow-[0_0_8px_var(--color-success)]" />
                 <span className="text-[9px] font-bold text-muted uppercase tracking-widest">Online</span>
               </>
             ) : (
@@ -165,7 +176,27 @@ export default function Sidebar({ activeView, setActiveView, openCharts, closeCh
               </>
             )}
           </div>
-          <span className="text-[9px] font-num text-faint">v0.1.0-alpha</span>
+          <div className="flex items-center gap-1.5">
+            <span className="text-[9px] font-num text-faint">v1.0.0A</span>
+            <button
+              onClick={toggleTheme}
+              title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              className="p-1 rounded-md text-muted hover:text-accent hover:bg-overlay border border-transparent hover:border-border transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/70"
+            >
+              {theme === 'dark' ? (
+                /* Sun — shown in dark mode, switches to light */
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 3v1.5m0 15V21m9-9h-1.5M4.5 12H3m15.36-6.36l-1.06 1.06M6.7 17.3l-1.06 1.06m12.72 0l-1.06-1.06M6.7 6.7L5.64 5.64M15.75 12a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0z" />
+                </svg>
+              ) : (
+                /* Moon — shown in light mode, switches to dark */
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+                </svg>
+              )}
+            </button>
+          </div>
         </div>
       </div>
     </aside>

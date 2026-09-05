@@ -26,7 +26,11 @@ const StatTile = ({ label, value, sub, accent, icon, onClick, delay }) => (
     <div className="flex items-start justify-between mb-4">
       <span
         className="w-9 h-9 rounded-md border flex items-center justify-center transition-transform duration-300 group-hover:scale-105"
-        style={{ color: accent, borderColor: `${accent}40`, background: `${accent}10` }}
+        style={{
+          color: accent,
+          borderColor: `color-mix(in srgb, ${accent} 25%, transparent)`,
+          background: `color-mix(in srgb, ${accent} 6%, transparent)`,
+        }}
       >
         {icon}
       </span>
@@ -34,7 +38,7 @@ const StatTile = ({ label, value, sub, accent, icon, onClick, delay }) => (
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
       </svg>
     </div>
-    <p className="text-2xl font-num font-bold text-white leading-none mb-1.5">{value}</p>
+    <p className="text-2xl font-num font-bold text-text leading-none mb-1.5">{value}</p>
     <p className="text-[10px] font-bold uppercase tracking-widest text-muted">{label}</p>
     {sub && <p className="text-[10px] text-faint mt-1">{sub}</p>}
   </button>
@@ -70,9 +74,9 @@ export default function Home({ setActiveView, bots = [], backendOk = true, refet
               <Badge variant="accent">{activeBots.length} running</Badge>
             )}
           </div>
-          <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight text-white mb-3">
+          <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight text-text mb-3">
             Apex<span className="text-accent">Algo</span>
-            <span className="ml-3 align-middle text-[10px] font-num font-medium text-faint tracking-[0.25em] uppercase">v0.1.0-alpha</span>
+            <span className="ml-3 align-middle text-[10px] font-num font-medium text-faint tracking-[0.25em] uppercase">v1.0.0A</span>
           </h1>
           <p className="text-muted text-sm md:text-base max-w-2xl leading-relaxed">
             Self-hosted quantitative trading terminal. Design strategies visually,
@@ -100,7 +104,7 @@ export default function Home({ setActiveView, bots = [], backendOk = true, refet
             delay={1}
             label="Total algorithms"
             value={bots.length}
-            accent="#fcd535"
+            accent="var(--color-accent)"
             onClick={() => setActiveView('bots')}
             icon={<svg className="w-4.5 h-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>}
           />
@@ -109,7 +113,7 @@ export default function Home({ setActiveView, bots = [], backendOk = true, refet
             label="Running now"
             value={activeBots.length}
             sub={activeBots.length ? 'evaluating on candle close' : 'all engines idle'}
-            accent="#2ebd85"
+            accent="var(--color-success)"
             onClick={() => setActiveView('bots')}
             icon={<svg className="w-4.5 h-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>}
           />
@@ -118,7 +122,7 @@ export default function Home({ setActiveView, bots = [], backendOk = true, refet
             label="Live execution"
             value={runningLive}
             sub={executionSub}
-            accent="#f6465d"
+            accent="var(--color-danger)"
             onClick={() => setActiveView('bots')}
             icon={<svg className="w-4.5 h-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>}
           />
@@ -127,7 +131,7 @@ export default function Home({ setActiveView, bots = [], backendOk = true, refet
             label="Analytics"
             value="P&L"
             sub="equity curve & drawdown"
-            accent="#0ea5e9"
+            accent="var(--color-info)"
             onClick={() => setActiveView('trades')}
             icon={<svg className="w-4.5 h-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>}
           />
@@ -166,11 +170,11 @@ export default function Home({ setActiveView, bots = [], backendOk = true, refet
                     <li key={bot.id}>
                       <button
                         onClick={() => openBuilder(bot)}
-                        className="w-full flex items-center gap-4 px-5 py-3.5 text-left hover:bg-white/[0.02] transition-colors group"
+                        className="w-full flex items-center gap-4 px-5 py-3.5 text-left hover:bg-text/[0.03] transition-colors group"
                       >
-                        <span className={`w-2 h-2 rounded-full shrink-0 ${bot.is_active ? 'bg-success shadow-[0_0_8px_#2ebd85] animate-pulse' : 'bg-faint/40'}`} />
+                        <span className={`w-2 h-2 rounded-full shrink-0 ${bot.is_active ? 'bg-success shadow-[0_0_8px_var(--color-success)] animate-pulse' : 'bg-faint/40'}`} />
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm font-semibold text-text truncate group-hover:text-white transition-colors">{bot.name}</p>
+                          <p className="text-sm font-semibold text-text truncate group-hover:text-text transition-colors">{bot.name}</p>
                           <p className="text-[10px] text-faint font-num truncate mt-0.5">
                             {symbols.slice(0, 3).join(' · ') || 'no pairs'}
                             {symbols.length > 3 && ` +${symbols.length - 3}`}

@@ -17,7 +17,7 @@
  */
 const VARIANTS = {
   primary:
-    'bg-accent text-accent-ink hover:bg-accent-hover shadow-[0_0_15px_rgba(252,213,53,0.15)] hover:shadow-glow-accent border border-transparent',
+    'bg-accent-fill text-accent-ink hover:bg-accent-fill-hover shadow-glow-accent-sm hover:shadow-glow-accent border border-transparent',
   secondary:
     'bg-raised text-text border border-border hover:border-border-strong hover:bg-overlay',
   ghost:

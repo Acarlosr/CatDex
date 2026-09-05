@@ -3,6 +3,7 @@ import { createChart, CandlestickSeries, HistogramSeries, LineSeries, createSeri
 import { apiClient } from '../api/client';
 import { humanizeApiError } from '../api/errors';
 import { INDICATOR_SCALE_MAP } from './Builder/indicatorConfig';
+import { getToken } from '../theme';
 import Button from './ui/Button';
 import Badge from './ui/Badge';
 
@@ -27,18 +28,20 @@ const getTimeframeSeconds = (tf) => {
     return 60; 
 }; 
 
-// Raw hex passed programmatically to lightweight-charts — first six mirror the
-// CSS tokens (info, accent, magenta, success, danger, purple); last two are extras
-const chartColors = ['#0ea5e9', '#fcd535', '#d946ef', '#2ebd85', '#f6465d', '#8b5cf6', '#ff9800', '#00bcd4'];
-const colorCache = {};
+// Series palette resolved from the live CSS tokens at call time so indicator
+// lines re-tint when the theme switches (chart is re-created on theme change).
+// Last three are extras with no token counterpart (magenta/orange/teal — legible on both themes).
+const getChartPalette = () => [
+    getToken('info'), getToken('accent'), getToken('success'), getToken('danger'),
+    getToken('purple'), '#d946ef', '#ff9800', '#00bcd4',
+];
+const colorCache = {}; // seriesId -> stable palette index
 let colorIdx = 0;
-const getColor = (str) => { 
-    if (colorCache[str]) return colorCache[str];
-    const color = chartColors[colorIdx % chartColors.length];
-    colorIdx++;
-    colorCache[str] = color;
-    return color;
-}; 
+const getColor = (str) => {
+    if (colorCache[str] === undefined) colorCache[str] = colorIdx++;
+    const palette = getChartPalette();
+    return palette[colorCache[str] % palette.length];
+};
 
 const formatNum = (num, decimals = 2) => { 
     if (num === undefined || num === null || isNaN(Number(num))) return '0.00'; 
@@ -76,6 +79,7 @@ function ChartEngine({ dataset, openDataVault }) {
   const [positions, setPositions] = useState([]);  
    
   const [retryTick, setRetryTick] = useState(0);
+  const [themeTick, setThemeTick] = useState(0); // bumps on apex-theme-changed -> chart re-init with new tokens
   const [showMenu, setShowMenu] = useState(false);
   const [expandedMenuBot, setExpandedMenuBot] = useState(null);  
   const [botConfigs, setBotConfigs] = useState({}); 
@@ -242,7 +246,7 @@ function ChartEngine({ dataset, openDataVault }) {
     try { 
       candleSeriesRef.current.setData(uniqueData); 
       const volumeData = uniqueData.map(d => ({ 
-        time: d.time, value: d.value, color: d.close >= d.open ? '#2ebd8580' : '#f6465d80'  
+        time: d.time, value: d.value, color: (d.close >= d.open ? getToken('success') : getToken('danger')) + '80'
       })); 
       volumeSeriesRef.current.setData(volumeData); 
        
@@ -274,7 +278,7 @@ function ChartEngine({ dataset, openDataVault }) {
             candleSeriesRef.current.update(latestDbCandle);
             volumeSeriesRef.current.update({
                 time: latestDbCandle.time, value: latestDbCandle.volume || latestDbCandle.value,
-                color: latestDbCandle.close >= latestDbCandle.open ? '#2ebd8580' : '#f6465d80'
+                color: (latestDbCandle.close >= latestDbCandle.open ? getToken('success') : getToken('danger')) + '80'
             });
 
             setCandleTimes(prev => prev.includes(latestDbCandle.time) ? prev : [...prev, latestDbCandle.time].sort((a,b) => a-b));
@@ -309,26 +313,26 @@ function ChartEngine({ dataset, openDataVault }) {
         setLoading(true);
         setErrorMsg(null);
         lastSignalIdRef.current = 0;
+        // lightweight-charts needs raw color values — resolve the live CSS
+        // tokens at init time; the chart is re-created on apex-theme-changed.
+        const tBg = getToken('bg'), tBorder = getToken('border'), tMuted = getToken('muted');
+        const tUp = getToken('success'), tDown = getToken('danger');
         const chart = createChart(chartContainerRef.current, {
-          // --- APEXALGO DARK THEME ---
-          // Raw hex required by lightweight-charts; values mirror the CSS tokens
-          // (bg #080a0f, border #202532, muted #848e9c)
-          layout: { background: { type: 'solid', color: '#080a0f' }, textColor: '#848e9c' },
-          grid: { vertLines: { color: '#202532' }, horzLines: { color: '#202532' } },
+          layout: { background: { type: 'solid', color: tBg }, textColor: tMuted },
+          grid: { vertLines: { color: tBorder }, horzLines: { color: tBorder } },
           crosshair: { mode: 0 },
 
-          rightPriceScale: { borderColor: '#202532', autoScale: true, scaleMargins: { top: 0.1, bottom: 0.25 } },
+          rightPriceScale: { borderColor: tBorder, autoScale: true, scaleMargins: { top: 0.1, bottom: 0.25 } },
 
-          leftPriceScale: { visible: true, borderColor: '#202532', autoScale: true, scaleMargins: { top: 0.8, bottom: 0 } },
+          leftPriceScale: { visible: true, borderColor: tBorder, autoScale: true, scaleMargins: { top: 0.8, bottom: 0 } },
 
-          timeScale: { borderColor: '#202532', timeVisible: true },
+          timeScale: { borderColor: tBorder, timeVisible: true },
           autoSize: true,
         });
         chartRef.current = chart;
 
         candleSeriesRef.current = chart.addSeries(CandlestickSeries, {
-          // Hex values mirror the success/danger CSS tokens
-          upColor: '#2ebd85', downColor: '#f6465d', borderVisible: false, wickUpColor: '#2ebd85', wickDownColor: '#f6465d'
+          upColor: tUp, downColor: tDown, borderVisible: false, wickUpColor: tUp, wickDownColor: tDown
         });
 
         markersPluginRef.current = createSeriesMarkers(candleSeriesRef.current, []);
@@ -379,8 +383,19 @@ function ChartEngine({ dataset, openDataVault }) {
       clearInterval(pollInterval);
       clearInterval(signalInterval);
       if (chartRef.current) { chartRef.current.remove(); chartRef.current = null; }
+      // Series belonged to the removed chart — drop refs so they're recreated
+      indicatorSeriesRef.current = {};
+      markersPluginRef.current = null;
+      priceLinesRef.current = [];
     };
-  }, [dataset.symbol, dataset.timeframe, retryTick]); // eslint-disable-line react-hooks/exhaustive-deps -- chart init must only re-run on symbol/timeframe change or manual retry
+  }, [dataset.symbol, dataset.timeframe, retryTick, themeTick]); // eslint-disable-line react-hooks/exhaustive-deps -- chart init must only re-run on symbol/timeframe change, theme switch, or manual retry
+
+  // Rebuild the chart with the new token values when the theme flips
+  useEffect(() => {
+    const onTheme = () => setThemeTick(t => t + 1);
+    window.addEventListener('apex-theme-changed', onTheme);
+    return () => window.removeEventListener('apex-theme-changed', onTheme);
+  }, []);
 
   useEffect(() => {
     if (signals.length === 0) return; 
@@ -478,12 +493,12 @@ function ChartEngine({ dataset, openDataVault }) {
         const buyTrades = itemsAtTime.filter(i => i.type === 'trade' && i.data.side === 'buy'); 
         const sellTrades = itemsAtTime.filter(i => i.type === 'trade' && i.data.side === 'sell'); 
          
-        // Marker hex values mirror the CSS tokens: success, danger, info, purple
-        if (buySigs.length > 0) finalMarkers.push({ time: time, position: 'belowBar', color: '#2ebd85', shape: 'arrowUp', text: 'S-B' });
-        if (sellSigs.length > 0) finalMarkers.push({ time: time, position: 'aboveBar', color: '#f6465d', shape: 'arrowDown', text: 'S-S' });
+        // Marker colors resolved from the live CSS tokens (raw values required)
+        if (buySigs.length > 0) finalMarkers.push({ time: time, position: 'belowBar', color: getToken('success'), shape: 'arrowUp', text: 'S-B' });
+        if (sellSigs.length > 0) finalMarkers.push({ time: time, position: 'aboveBar', color: getToken('danger'), shape: 'arrowDown', text: 'S-S' });
 
-        if (buyTrades.length > 0) finalMarkers.push({ time: time, position: 'belowBar', color: '#0ea5e9', shape: 'circle', text: 'T-BUY' });
-        if (sellTrades.length > 0) finalMarkers.push({ time: time, position: 'aboveBar', color: '#8b5cf6', shape: 'circle', text: 'T-SELL' });
+        if (buyTrades.length > 0) finalMarkers.push({ time: time, position: 'belowBar', color: getToken('info'), shape: 'circle', text: 'T-BUY' });
+        if (sellTrades.length > 0) finalMarkers.push({ time: time, position: 'aboveBar', color: getToken('purple'), shape: 'circle', text: 'T-SELL' });
     }); 
 
     finalMarkers.sort((a, b) => a.time - b.time); 
@@ -502,7 +517,7 @@ function ChartEngine({ dataset, openDataVault }) {
 
             const priceLine = { 
                 price: pos.entry_price, 
-                color: isBacktest ? '#848e9c' : (pos.side === 'long' ? '#2ebd85' : '#f6465d'), // muted token for backtest
+                color: isBacktest ? getToken('muted') : (pos.side === 'long' ? getToken('success') : getToken('danger')),
                 lineWidth: 2, 
                 lineStyle: 2,  
                 axisLabelVisible: true, 

@@ -3,6 +3,29 @@
 Contract for all view work. Tokens live in `src/index.css` under `@theme`.
 Primitives live in `src/components/ui/`. **Follow this file; do not invent ad-hoc styles.**
 
+## Theming (dark + light)
+
+The app ships two runtime themes. Dark is the default; light is applied by a
+`light` class on `<html>` (toggled from the Sidebar footer, persisted in
+localStorage `apex_theme`). Everything is driven by CSS variables:
+
+- `@theme` tokens reference `--apx-*` runtime vars; `:root` holds the dark
+  values and `html.light { … }` overrides every one of them. Utilities like
+  `bg-raised` / `text-muted` therefore re-theme automatically — never assume
+  a dark background in a view.
+- **Never hardcode a theme-specific color.** Use token utilities, or
+  `var(--color-…)` in inline styles/SVG `style` props, or
+  `color-mix(in srgb, var(--color-…) N%, transparent)` for alpha tints.
+- Canvas/chart libraries that need raw values (lightweight-charts, ReactFlow
+  MiniMap/Background) read tokens via `getToken(name)` from `src/theme.js`
+  and re-render on the `apex-theme-changed` window event.
+- `text-white` / `bg-white/...` are forbidden — use `text-text` and
+  `bg-text/[0.03]`-style tints so hovers work on both themes.
+- Accent split: `accent` is the *text/border/icon* gold (darkens in light
+  mode for contrast); `accent-fill` (+`accent-fill-hover`) is the gold
+  *surface* that always carries `accent-ink` text (buttons).
+- The dark values listed below remain the canonical reference palette.
+
 ## Tokens (use as Tailwind utilities)
 
 ### Surfaces (darkest → lightest)
