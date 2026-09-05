@@ -283,7 +283,13 @@ The AI should respond with:
 
 ## Bot Import File Format (`.apex.json`)
 
-AI assistants can generate `.apex.json` files that users import directly into ApexAlgo. The format must match exactly.
+AI assistants can generate `.apex.json` files that users import directly into ApexAlgo (Bot Manager → Import). The format must match exactly.
+
+**Instructions when you are the AI generating a strategy:** output exactly one valid JSON document in a fenced code block, nothing else appended inside it. Use only indicator methods, operators and field names from this document — the backend validates on import and rejects unknown methods, unsupported timeframes, invalid operators and negative price-data offsets. Give every node a short descriptive id (e.g. `rsi14`, `entry_gate`). Set `ui_layout` to `{"nodes": [], "edges": []}`; the visual editor rebuilds the layout automatically. Default to `"is_sandbox": true`, `"api_execution": false` and `"api_key_name": null` so the strategy always arrives in safe simulation mode. If the requested strategy needs something this format cannot express (e.g. shorting, multi-timeframe logic in one graph), say so instead of approximating silently.
+
+**Import behavior:** if a bot with the same name already exists, the import is auto-renamed ("(imported)", "(imported) 2", …). Validation errors are returned as a list and the import is rejected — fix and re-emit the JSON.
+
+**Verified reference examples** live in the repository under `examples/`: `RSI_Dip_Hunter.apex.json` (RSI mean-reversion with EMA trend filter, fixed SL/TP), `EMA_Trend_Rider.apex.json` (EMA cross with trailing stop, multi-pair), `Bollinger_Bounce.apex.json` (band bounce with trend filter and logic gate). All three import and backtest cleanly — mirror their structure.
 
 ### File Structure
 
@@ -332,7 +338,7 @@ AI assistants can generate `.apex.json` files that users import directly into Ap
 | `max_positions_scope` | `"per_pair"` or `"global"` | Position limit scope |
 | `cooldown_trades` | int | Max new entries per cooldown window (0 = off) |
 | `cooldown_candles` | int | Cooldown window size in candles |
-| `max_drawdown` | number | Auto-stop threshold in % (0 = off) |
+| `max_drawdown` | number | Auto-stop threshold in % (0 = off). Measured peak-to-trough on the mark-to-market equity curve (cash + open positions), evaluated after the backtest and after every closed live position. |
 | `max_order_value` | number | Max USD per live order (0 = off) |
 | `api_execution` | bool | `true` for live/paper via API key |
 | `backtest_on_start` | bool | Run backtest when bot starts |
@@ -367,9 +373,25 @@ Each node has a unique ID (key) and a definition object. Nodes reference each ot
   "output_idx": 0
 }
 ```
-- `method`: indicator key from the tables above (e.g. `rsi`, `ema`, `bbands`, `supertrend`)
+- `method`: indicator key from the tables above (e.g. `rsi`, `ema`, `bbands`, `supertrend`). **The backend enforces an allowlist** — any method outside the tables above is rejected on import with a validation error, so never invent method names.
 - `params`: parameter object matching the indicator's parameter IDs and values
-- `output_idx`: which output line to use (0 = first line). For multi-line indicators like MACD (3 lines) or Bollinger Bands (5 lines), this selects which line feeds into conditions.
+- `output_idx`: which output column to use (0 = first). For single-line indicators always use `0`. For multi-line indicators the exact column order is:
+
+| Method | output_idx → column |
+|---|---|
+| `macd` | 0 = MACD line, 1 = histogram, 2 = signal line |
+| `bbands` | 0 = lower band, 1 = middle band, 2 = upper band, 3 = bandwidth, 4 = percent |
+| `stoch` | 0 = %K, 1 = %D |
+| `stochrsi` | 0 = %K, 1 = %D |
+| `supertrend` | 0 = trend value, 1 = direction (+1/−1), 2 = long band, 3 = short band |
+| `adx` | 0 = ADX, 1 = +DI, 2 = −DI |
+| `kc` (Keltner) | 0 = lower, 1 = basis, 2 = upper |
+| `donchian` | 0 = lower, 1 = middle, 2 = upper |
+| `accbands` | 0 = lower, 1 = middle, 2 = upper |
+| `fisher` | 0 = fisher, 1 = signal |
+| `ppo` | 0 = PPO line, 1 = histogram, 2 = signal |
+| `tsi` | 0 = TSI, 1 = signal |
+| `ichimoku` | 0 = senkou span A, 1 = senkou span B, 2 = tenkan, 3 = kijun. **Index 4 (chikou) is intentionally disabled** (it is a look-ahead value) and always returns no data — never use it. |
 
 **Price data node:**
 ```json
@@ -380,7 +402,7 @@ Each node has a unique ID (key) and a definition object. Nodes reference each ot
 }
 ```
 - `type`: `open`, `high`, `low`, `close`, or `volume`
-- `offset`: `0` = current candle, `-1` = previous candle, etc.
+- `offset`: number of candles **back**: `0` = current candle, `1` = previous candle, `2` = two candles ago. **Never use negative offsets** — they would reference future candles (look-ahead) and are rejected on import.
 
 **Condition node:**
 ```json

@@ -7,11 +7,11 @@
 ![React](https://img.shields.io/badge/React-20232A?style=for-the-badge&logo=react&logoColor=61DAFB)
 ![CCXT](https://img.shields.io/badge/CCXT-Integrated-orange?style=for-the-badge)
 ![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)
-![Status](https://img.shields.io/badge/Status-Alpha-yellow?style=for-the-badge)
+![Status](https://img.shields.io/badge/Status-Beta-green?style=for-the-badge)
 
 ApexAlgo is a full-stack algorithmic trading platform for building, backtesting, and executing systematic trading strategies — without writing code. A node-based visual strategy builder connects directly to a high-performance async execution engine with multi-exchange market data, encrypted exchange key management, and real-time per-bot console output.
 
-> **Alpha release — not production-ready.** APIs and data schemas may change between versions.
+> **Beta release.** Joining the beta test? Start with **[BETA.md](BETA.md)** — step-by-step setup, your first bot in 5 minutes, and mandatory safety rules for live trading. Want an AI to design a strategy for you? Paste **[STRATEGY_CONTEXT.md](STRATEGY_CONTEXT.md)** into any AI assistant and import the resulting `.apex.json`. Ready-made strategies live in [`examples/`](examples/).
 
 ---
 
@@ -123,12 +123,12 @@ First start takes ~2 minutes (builds images + compiles frontend). Subsequent sta
 
 | Service | URL |
 | :--- | :--- |
-| Frontend | `https://localhost:5173` |
-| Backend API | `https://localhost:8000` |
-| API Docs (Swagger) | `https://localhost:8000/docs` |
+| Web UI (frontend + API proxy) | `https://localhost:5173` |
+| Backend API (direct, optional) | `https://localhost:8000` |
+| API Docs (Swagger) | disabled by default — start backend with `ENABLE_DOCS=1` |
 
-> Accept the self-signed certificate warning in your browser on first visit.
-> For LAN access, you must also visit `https://YOUR-IP:8000` and accept the backend certificate — otherwise the browser blocks API requests from the frontend.
+> Accept the self-signed certificate warning in your browser on first visit — only once, on port 5173. The UI proxies all API calls through the same origin, so the backend certificate never needs to be trusted separately.
+> Ports bind to `127.0.0.1` by default (local machine only). For LAN access see below.
 
 ### Managing ApexAlgo
 
@@ -183,19 +183,15 @@ docker compose build && docker compose up -d
 
 ### Custom LAN Access
 
-To access ApexAlgo from another device on your network, edit `data/.env`:
-
-```env
-VITE_API_BASE_URL=https://YOUR-LAN-IP:8000
-```
-
-Then delete old certs (so they regenerate with your IP in the SAN) and rebuild:
+By default both ports bind to `127.0.0.1` (local machine only). To reach the UI from other devices on your network, start with:
 
 ```bash
-docker compose down
-rm -f data/cert/cert.pem data/cert/key.pem
-docker compose up -d --build
+BIND_ADDR=0.0.0.0 docker compose up -d
 ```
+
+Then browse to `https://YOUR-LAN-IP:5173` and accept the certificate warning. All API traffic flows through the same origin (the built-in proxy), so no additional configuration is needed. Never expose these ports to the public internet.
+
+`VITE_API_BASE_URL` in `data/.env` is now optional: leave it empty (or unset) to use the same-origin proxy. Only set it if the frontend must call a backend on a *different* host, and expect one extra certificate acceptance on that origin.
 
 ### Data Persistence
 
@@ -271,15 +267,17 @@ Both setup methods (Docker and manual) auto-generate a `.env` file with secure k
 VITE_API_BASE_URL=https://<your-ip>:8000
 ```
 
-This is pre-filled with your detected LAN IP (manual) or `localhost` (Docker). Change it if you access ApexAlgo from a different host.
+In Docker this is optional: an empty value means the frontend uses its own origin (the built-in API proxy). Manual (non-Docker) installs set it to the backend's address.
 
 | Variable | Description | Auto-generated |
 | :--- | :--- | :--- |
 | `MASTER_API_KEY` | Backend authentication key for all API requests | Yes |
 | `DATABASE_URL` | SQLAlchemy database connection string | Yes |
 | `ENCRYPTION_KEY` | Fernet key used to encrypt exchange API credentials at rest | Yes |
-| `VITE_API_BASE_URL` | Backend base URL used by the frontend | Yes — verify if needed |
+| `VITE_API_BASE_URL` | Backend base URL for the frontend (empty = same-origin proxy) | Yes — optional in Docker |
 | `CORS_ORIGINS` | Comma-separated list of allowed browser origins | Yes |
+| `BIND_ADDR` | Host interface for published ports (default `127.0.0.1`; set `0.0.0.0` for LAN) | No — set when needed |
+| `ENABLE_DOCS` | Set `1` to enable Swagger UI at `/docs` | No |
 
 The frontend no longer embeds the API key in its bundle. On first visit, enter the `MASTER_API_KEY` from `data/.env` in the login screen; it is stored in your browser's localStorage.
 
