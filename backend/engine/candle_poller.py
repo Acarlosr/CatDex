@@ -196,7 +196,12 @@ class CandlePoller:
         db: Session = SessionLocal()
         try:
             # Resume from the newest stored candle instead of re-fetching the
-            # whole lookback window on every reconnect
+            # whole lookback window on every reconnect. When the requested
+            # lookback reaches further back than the stored history (a new
+            # bot with a larger lookback), fill that older gap first, then
+            # jump forward past the stored range.
+            backward_until_ms = None
+            resume_since = None
             last_existing = db.query(Candle.timestamp).filter(
                 Candle.exchange == exchange_name,
                 Candle.symbol == symbol,
@@ -207,7 +212,20 @@ class CandlePoller:
                 if last_dt.tzinfo is None:
                     last_dt = last_dt.replace(tzinfo=timezone.utc)
                 resume_since = int(last_dt.timestamp() * 1000) + tf_ms
-                if resume_since > current_since:
+
+                oldest_existing = db.query(Candle.timestamp).filter(
+                    Candle.exchange == exchange_name,
+                    Candle.symbol == symbol,
+                    Candle.timeframe == timeframe,
+                ).order_by(Candle.timestamp.asc()).first()
+                oldest_dt = oldest_existing[0]
+                if oldest_dt.tzinfo is None:
+                    oldest_dt = oldest_dt.replace(tzinfo=timezone.utc)
+                oldest_ms = int(oldest_dt.timestamp() * 1000)
+
+                if start_ts < oldest_ms - tf_ms:
+                    backward_until_ms = oldest_ms
+                elif resume_since > current_since:
                     current_since = resume_since
 
             while total_saved < lookback_limit:
@@ -296,6 +314,16 @@ class CandlePoller:
                     total_saved += len(new_candles)
 
                 last_ts = int(batch[-1][0])
+
+                # Older gap closed — skip past the already-stored range and
+                # continue where the previous backfill left off
+                if backward_until_ms is not None and last_ts + tf_ms >= backward_until_ms:
+                    backward_until_ms = None
+                    if resume_since and resume_since > last_ts:
+                        current_since = resume_since
+                        time.sleep(0.35)
+                        continue
+
                 if last_ts >= now_ms or len(batch) < 2:
                     break
 
