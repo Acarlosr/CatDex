@@ -37,6 +37,26 @@ def _indicator_fingerprint(settings):
     return md5(json.dumps(ind_nodes, sort_keys=True).encode()).hexdigest()
 
 
+def _num(v, default=0.0):
+    """Cast a setting to float, tolerating None and '' (a cleared UI field
+    keeps the key present, so dict .get defaults never kick in)."""
+    if v is None or v == "":
+        return float(default)
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _int(v, default=0):
+    if v is None or v == "":
+        return int(default)
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return int(default)
+
+
 def _tf_seconds(timeframe: str) -> int:
     if timeframe.endswith('m'): return int(timeframe[:-1]) * 60
     if timeframe.endswith('h'): return int(timeframe[:-1]) * 3600
@@ -361,7 +381,7 @@ class BotManager:
             trade_amount = amount_value / current_price
             return max(trade_amount, 0.0001)
         else:
-            capital = current_equity if current_equity is not None else float(bot_settings.get("backtest_capital", 1000))
+            capital = current_equity if current_equity is not None else _num(bot_settings.get("backtest_capital"), 1000)
             if capital <= 0:
                 return None
             investment = capital * (amount_value / 100)
@@ -491,7 +511,7 @@ class BotManager:
 
         if not events and is_sell_signal:
             exit_settings = trade_settings.get("exit", {})
-            pct_to_close = float(exit_settings.get('amount_value', 100)) if exit_settings.get('amount_type') == 'percentage' else 100
+            pct_to_close = _num(exit_settings.get('amount_value'), 100) if exit_settings.get('amount_type') == 'percentage' else 100
             events.append({
                 'qty_pct': pct_to_close,
                 'reason': "strategy",
@@ -588,7 +608,7 @@ class BotManager:
             timeframe = bot.settings.get("timeframe")
             exit_node = bot.settings.get("exit_node")
             run_backtest = bot.settings.get("backtest_on_start", False)
-            lookback_limit = int(bot.settings.get("backtest_lookback", 150))
+            lookback_limit = _int(bot.settings.get("backtest_lookback"), 150)
 
             if run_backtest:
                 # A backtest is deterministic, so always simulate the whole
@@ -602,21 +622,21 @@ class BotManager:
                 symbols = [bot.settings.get("symbol")]
 
             # Shared capital pool across ALL symbols for this bot
-            bt_starting_capital = float(bot.settings.get("backtest_capital", 1000))
+            bt_starting_capital = _num(bot.settings.get("backtest_capital"), 1000)
             bt_equity = bt_starting_capital  # Available cash (not locked in positions)
             bt_peak_equity = bt_starting_capital
             bt_max_dd = 0.0  # peak-to-trough on the mark-to-market equity curve
 
             # Fee and slippage for realistic backtest P&L
             bt_trade_settings = bot.settings.get("trade_settings", {})
-            bt_entry_fee = float(bt_trade_settings.get("entry", {}).get("fee", 0)) / 100
+            bt_entry_fee = _num(bt_trade_settings.get("entry", {}).get("fee"), 0) / 100
             raw_exit_fee = bt_trade_settings.get("exit", {}).get("fee")
-            bt_exit_fee = float(raw_exit_fee) / 100 if raw_exit_fee is not None else bt_entry_fee
-            bt_entry_slippage = float(bt_trade_settings.get("entry", {}).get("slippage", 0)) / 100
-            bt_exit_slippage = float(bt_trade_settings.get("exit", {}).get("slippage", 0)) / 100
+            bt_exit_fee = _num(raw_exit_fee, bt_entry_fee * 100) / 100 if raw_exit_fee not in (None, "") else bt_entry_fee
+            bt_entry_slippage = _num(bt_trade_settings.get("entry", {}).get("slippage"), 0) / 100
+            bt_exit_slippage = _num(bt_trade_settings.get("exit", {}).get("slippage"), 0) / 100
 
-            cooldown_trades = int(bot.settings.get("cooldown_trades", 0))
-            cooldown_candles = int(bot.settings.get("cooldown_candles", 0))
+            cooldown_trades = _int(bot.settings.get("cooldown_trades"), 0)
+            cooldown_candles = _int(bot.settings.get("cooldown_candles"), 0)
 
             # Per-symbol data prep first (indicators stay per symbol); execution
             # then runs over one merged timeline so all symbols contend for the
@@ -796,7 +816,7 @@ class BotManager:
                     timeline.append((_naive_utc(ts_val), ci, idx))
             timeline.sort(key=lambda t: (t[0], t[1]))
 
-            max_pos = int(bot.settings.get("max_positions", 1))
+            max_pos = _int(bot.settings.get("max_positions"), 1)
 
             for _ts_key, ci, index in timeline:
                 ctx = sym_contexts[ci]
@@ -987,7 +1007,7 @@ class BotManager:
                 except Exception:
                     db.rollback()
 
-                max_drawdown_pct = float(bot.settings.get("max_drawdown", 0))
+                max_drawdown_pct = _num(bot.settings.get("max_drawdown"), 0)
                 if max_drawdown_pct > 0:
                     self._drawdown_cache.pop((bot.name, "backtest"), None)
                     if bt_max_dd >= max_drawdown_pct:
@@ -1125,9 +1145,9 @@ class BotManager:
                         continue
 
                     # Max drawdown guard: auto-stop bot if live drawdown exceeds threshold
-                    max_drawdown_pct = float(bot.settings.get("max_drawdown", 0))
+                    max_drawdown_pct = _num(bot.settings.get("max_drawdown"), 0)
                     if max_drawdown_pct > 0:
-                        live_capital = float(bot.settings.get("backtest_capital", 1000))
+                        live_capital = _num(bot.settings.get("backtest_capital"), 1000)
                         dd_state = self._get_drawdown(bot.name, db, mode_group="live", starting_capital=live_capital)
                         if dd_state["max_dd"] >= max_drawdown_pct:
                             logger.warning("Bot '%s' hit max drawdown (%.2f%% >= %.2f%%), auto-stopping", bot.name, dd_state["max_dd"], max_drawdown_pct)
@@ -1193,7 +1213,7 @@ class BotManager:
                             _cached_ccxt.load_markets()
                         return _cached_ccxt
 
-                    max_pos = int(bot.settings.get("max_positions", 1))
+                    max_pos = _int(bot.settings.get("max_positions"), 1)
                     scope = bot.settings.get("max_positions_scope", "per_pair")
 
                     # Use pre-loaded positions instead of per-bot DB query
@@ -1208,8 +1228,8 @@ class BotManager:
                     just_opened_ids = set()
 
                     # Cooldown check using pre-loaded counts
-                    cooldown_trades = int(bot.settings.get("cooldown_trades", 0))
-                    cooldown_candles = int(bot.settings.get("cooldown_candles", 0))
+                    cooldown_trades = _int(bot.settings.get("cooldown_trades"), 0)
+                    cooldown_candles = _int(bot.settings.get("cooldown_candles"), 0)
 
                     can_buy_cooldown = True
                     if cooldown_trades > 0 and cooldown_candles > 0:
@@ -1243,7 +1263,7 @@ class BotManager:
 
                                     # Size trades from the exchange balance, capped at the
                                     # per-bot allocation (backtest_capital)
-                                    allocation = float(bot.settings.get("backtest_capital", 1000))
+                                    allocation = _num(bot.settings.get("backtest_capital"), 1000)
                                     free_balance = self._get_live_capital(ccxt_inst, api_key_record, ccxt_symbol, bot.name)
                                     if free_balance is None:
                                         if mode == "live":
@@ -1271,7 +1291,7 @@ class BotManager:
                                         blb.push(bot.name, "WARN", f"{min_violation} — increase trade size")
                                         continue
                                     # Safety guard: reject orders exceeding max_order_value
-                                    max_order_usd = float(bot.settings.get("max_order_value", 0))
+                                    max_order_usd = _num(bot.settings.get("max_order_value"), 0)
                                     if max_order_usd > 0:
                                         order_value_usd = trade_amount * current_price
                                         if order_value_usd > max_order_usd:

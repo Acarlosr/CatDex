@@ -452,7 +452,7 @@ const BotBuilderFlow = ({ closeBuilder, editingBot }) => {
                 max_order_value: configNode.data.maxOrderValue || 0,
                 api_execution: configNode.data.executionMode === 'exchange',
                 backtest_on_start: backtestNode ? backtestNode.data.runOnStart : false,
-                backtest_capital: backtestNode ? backtestNode.data.capital : 1000,
+                backtest_capital: backtestNode ? (backtestNode.data.capital || 1000) : 1000,
                 backtest_lookback: backtestNode ? (backtestNode.data.lookback || 150) : 150,
                 api_key_name: apiKeyName,
                 data_exchange: dataExchange,
