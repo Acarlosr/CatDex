@@ -352,7 +352,10 @@ export default function TradeManager({ setError, bots = [] }) {
             const bot = bots.find(b => b.name === name);
             return bot?.settings?.backtest_capital || 1000;
         });
+        // Per-bot capital is a separate pool, so total deployed capital is the
+        // sum across the bots in view; a single bot is just its own pool.
         const startingCapital = capitalPerBot.length > 0 ? Math.max(...capitalPerBot) : 1000;
+        const totalCapital = capitalPerBot.length > 0 ? capitalPerBot.reduce((a, b) => a + b, 0) : 1000;
 
         let equity = startingCapital, peakEq = startingCapital, maxDDpct = 0;
         for (const p of sorted) {
@@ -405,6 +408,9 @@ export default function TradeManager({ setError, bots = [] }) {
             totalFees,
             avgWin: wins.length > 0 ? grossProfit / wins.length : 0,
             avgLoss: losses.length > 0 ? grossLoss / losses.length : 0,
+            totalCapital,
+            botCount: filteredBotNames.length,
+            returnPct: totalCapital > 0 ? (netPnl / totalCapital) * 100 : 0,
         };
     }, [closedPositions, orders, entryTsByPos, bots]);
 
@@ -586,20 +592,26 @@ export default function TradeManager({ setError, bots = [] }) {
             {/* ── STATS GRID ─────────────────────────────────────────────────── */}
             {initialLoading ? (
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    {Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-[88px] w-full rounded-lg" />)}
+                    {Array.from({ length: 10 }).map((_, i) => <Skeleton key={i} className="h-[88px] w-full rounded-lg" />)}
                 </div>
             ) : (
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     <StatCard
                         label="Net PNL"
                         value={`${stats.netPnl >= 0 ? '+' : '-'}$${safeNum(Math.abs(stats.netPnl))}`}
-                        sub={`${stats.wins}W / ${stats.losses}L`}
+                        sub={stats.total > 0 ? `${stats.returnPct >= 0 ? '+' : ''}${safeNum(stats.returnPct, 1)}% on $${safeNum(stats.totalCapital, 0)}` : 'no closed trades'}
                         color={stats.netPnl >= 0 ? 'green' : 'red'}
+                    />
+                    <StatCard
+                        label="Starting Capital"
+                        value={`$${safeNum(stats.totalCapital, 0)}`}
+                        sub={stats.botCount > 1 ? `total across ${stats.botCount} bots` : 'allocated to this bot'}
+                        color="gold"
                     />
                     <StatCard
                         label="Win Rate"
                         value={`${safeNum(stats.winRate, 1)}%`}
-                        sub={`${stats.total} closed trades`}
+                        sub={`${stats.wins} wins / ${stats.losses} losses`}
                         color="cyan"
                     />
                     <StatCard
@@ -621,8 +633,14 @@ export default function TradeManager({ setError, bots = [] }) {
                     <StatCard
                         label="Avg Win"
                         value={stats.wins > 0 ? `+$${safeNum(stats.avgWin)}` : '—'}
-                        sub={stats.losses > 0 ? `Avg Loss  -$${safeNum(stats.avgLoss)}` : 'No losses'}
+                        sub="per winning trade"
                         color="green"
+                    />
+                    <StatCard
+                        label="Avg Loss"
+                        value={stats.losses > 0 ? `-$${safeNum(stats.avgLoss)}` : '—'}
+                        sub="per losing trade"
+                        color="red"
                     />
                     <StatCard
                         label="Avg Hold Time"

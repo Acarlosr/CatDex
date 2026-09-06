@@ -797,15 +797,18 @@ class BotManager:
                     "last_close": None,
                 })
 
-            # A whitelist symbol without any candle data means the bot cannot
-            # do what it was configured to do (no backtest, no drawdown gate,
-            # blind live evaluation) — stop instead of silently going live.
-            if empty_symbols:
-                logger.warning("Bot '%s' stopped: no candle data for %s", bot.name, ", ".join(empty_symbols))
-                blb.push(bot.name, "ERROR", f"Stopped: no historical data for {', '.join(empty_symbols)}. Fix the pair/timeframe or try again once the exchange responds.")
+            # Only stop when NO whitelist symbol produced usable data. If some
+            # symbols have data, trade those and just warn about the empties
+            # (a single bad/new pair shouldn't take the whole bot down).
+            if not sym_contexts:
+                reason = ", ".join(empty_symbols) if empty_symbols else "any configured symbol"
+                logger.warning("Bot '%s' stopped: no candle data for %s", bot.name, reason)
+                blb.push(bot.name, "ERROR", f"Stopped: no historical data for {reason}. Fix the pair/timeframe or try again once the exchange responds.")
                 bot.is_active = False
                 db.commit()
                 return
+            if empty_symbols:
+                blb.push(bot.name, "WARN", f"No data for {', '.join(empty_symbols)} — continuing with the remaining symbol(s).")
 
             # ── Merged chronological execution across all symbols ──
             timeline = []
