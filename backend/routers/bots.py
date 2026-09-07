@@ -98,6 +98,11 @@ def get_bots_summary(db: Session = Depends(get_db)):
                 "last_backtest_summary": b.settings.get("last_backtest_summary") if b.settings else None,
                 "last_stop_reason": b.settings.get("last_stop_reason") if b.settings else None,
                 "max_drawdown": b.settings.get("max_drawdown") if b.settings else None,
+                # Sizing fields for the Analytics capital-allocation panel
+                "max_positions": b.settings.get("max_positions", 1) if b.settings else 1,
+                "max_order_value": b.settings.get("max_order_value") if b.settings else None,
+                "entry_amount_type": (b.settings.get("trade_settings") or {}).get("entry", {}).get("amount_type", "percentage") if b.settings else "percentage",
+                "entry_amount_value": (b.settings.get("trade_settings") or {}).get("entry", {}).get("amount_value") if b.settings else None,
             },
             # In-memory engine phase (starting / fetching / backtesting / live / halted)
             "runtime": bot_manager.get_runtime(b.name),

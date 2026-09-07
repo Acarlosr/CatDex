@@ -589,6 +589,79 @@ export default function TradeManager({ setError, bots = [] }) {
 
     const [breakdownView, setBreakdownView] = useState('bot');
 
+    // ── Capital allocation (config-driven: pool, entry size, exposure) ────────
+    // Each bot owns one capital pool shared by all its pairs; a pair never has a
+    // fixed budget. Rows respect the bot / pair / exchange / timeframe filters.
+    const allocation = useMemo(() => {
+        const deployedByBot = new Map();
+        const deployedByPair = new Map();
+        for (const p of positions) {
+            if (p.status !== 'open') continue;
+            const v = (p.amount || 0) * (p.entry_price || 0);
+            const b = deployedByBot.get(p.bot_name) || { value: 0, count: 0 };
+            b.value += v; b.count += 1; deployedByBot.set(p.bot_name, b);
+            const s = deployedByPair.get(p.symbol) || { value: 0, count: 0, bots: new Set() };
+            s.value += v; s.count += 1; s.bots.add(p.bot_name); deployedByPair.set(p.symbol, s);
+        }
+
+        const byBot = bots
+            .filter(b => filterBot === 'all' || b.name === filterBot)
+            .filter(b => filterExchange === 'all' || (b.settings?.data_exchange || 'okx') === filterExchange)
+            .filter(b => filterInterval === 'all' || b.settings?.timeframe === filterInterval)
+            .map(b => {
+                const s = b.settings || {};
+                const symbols = Array.isArray(s.symbols) && s.symbols.length ? s.symbols : (s.symbol ? [s.symbol] : []);
+                if (filterSymbol !== 'all' && !symbols.includes(filterSymbol)) return null;
+                const pool = Number(s.backtest_capital) || 1000;
+                const rawVal = Number(s.entry_amount_value);
+                const isFixed = s.entry_amount_type === 'fixed';
+                const entryPct = isFixed
+                    ? (rawVal > 0 ? (rawVal / pool) * 100 : 100)
+                    : (rawVal > 0 ? rawVal : 100);
+                const entryUsd = isFixed ? (rawVal > 0 ? rawVal : pool) : pool * (entryPct / 100);
+                const maxPositions = Math.max(1, Number(s.max_positions) || 1);
+                const cap = Number(s.max_order_value) || 0;
+                const exposurePct = Math.min(100, entryPct * maxPositions);
+                const dep = deployedByBot.get(b.name) || { value: 0, count: 0 };
+                return {
+                    key: b.name, label: b.name, isActive: !!b.is_active, timeframe: s.timeframe,
+                    mode: s.api_execution ? 'live' : (b.is_sandbox ? 'paper' : 'backtest'),
+                    exchange: s.data_exchange || 'okx',
+                    pool, entryPct, entryUsd, isFixed, maxPositions, cap,
+                    exposurePct, exposureUsd: pool * (exposurePct / 100),
+                    symbols, deployed: dep.value, openCount: dep.count,
+                    free: Math.max(0, pool - dep.value),
+                    runtime: b.runtime?.phase || null,
+                };
+            })
+            .filter(Boolean)
+            .sort((a, b) => b.pool - a.pool);
+
+        // Per pair: which bots can trade it and what a single entry may commit.
+        const pairMap = new Map();
+        for (const r of byBot) {
+            for (const sym of r.symbols) {
+                if (filterSymbol !== 'all' && sym !== filterSymbol) continue;
+                const g = pairMap.get(sym) || { key: sym, label: sym, bots: [], maxEntry: 0, poolAccess: 0 };
+                g.bots.push(r.label);
+                g.maxEntry += r.entryUsd;
+                g.poolAccess += r.pool;
+                pairMap.set(sym, g);
+            }
+        }
+        const byPair = [...pairMap.values()].map(g => {
+            const dep = deployedByPair.get(g.key) || { value: 0, count: 0 };
+            return { ...g, deployed: dep.value, openCount: dep.count };
+        }).sort((a, b) => b.deployed - a.deployed || b.maxEntry - a.maxEntry);
+
+        const totalPool = byBot.reduce((a, r) => a + r.pool, 0);
+        const totalDeployed = byBot.reduce((a, r) => a + r.deployed, 0);
+        const totalExposure = byBot.reduce((a, r) => a + r.exposureUsd, 0);
+        return { byBot, byPair, totalPool, totalDeployed, totalExposure };
+    }, [bots, positions, filterBot, filterSymbol, filterExchange, filterInterval]);
+
+    const [allocationView, setAllocationView] = useState('bot');
+
     // ── Monthly net PNL (last 12 months with activity) ────────────────────────
 
     const monthlyReturns = useMemo(() => {
@@ -1051,6 +1124,114 @@ export default function TradeManager({ setError, bots = [] }) {
                                 </div>
                             ))}
                         </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── CAPITAL ALLOCATION ─────────────────────────────────────────── */}
+            {!initialLoading && allocation.byBot.length > 0 && (
+                <div className="terminal-card overflow-hidden">
+                    <div className="px-5 py-3.5 border-b border-border bg-bg/40 flex items-center justify-between gap-3 flex-wrap">
+                        <div>
+                            <h2 className="text-[11px] font-bold uppercase tracking-wider text-text">Capital Allocation</h2>
+                            <p className="text-[9px] text-muted mt-0.5 uppercase tracking-wider">
+                                Each algorithm owns one pool shared by all its pairs · entries take a % of free equity · pairs have no fixed budget
+                            </p>
+                        </div>
+                        <div className="flex items-center gap-4 flex-wrap">
+                            <div className="flex items-center gap-4 text-[10px] font-num">
+                                <span className="text-muted">Pools <span className="text-text font-bold">${safeNum(allocation.totalPool, 0)}</span></span>
+                                <span className="text-muted">Deployed <span className={`font-bold ${allocation.totalDeployed > 0 ? 'text-accent' : 'text-text'}`}>${safeNum(allocation.totalDeployed, 0)}</span></span>
+                                <span className="text-muted">Max exposure <span className="text-text font-bold">${safeNum(allocation.totalExposure, 0)}</span></span>
+                            </div>
+                            <div className="flex bg-inset rounded-md border border-border overflow-hidden">
+                                {[['bot', 'By algorithm'], ['pair', 'By pair']].map(([v, l]) => (
+                                    <button key={v} type="button" onClick={() => setAllocationView(v)}
+                                        className={`px-3 py-1.5 text-[9px] font-bold uppercase tracking-wider transition-colors ${allocationView === v ? 'bg-accent/10 text-accent' : 'text-muted hover:text-text'}`}>
+                                        {l}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                    <div className="overflow-x-auto max-h-[320px] overflow-y-auto custom-scrollbar">
+                        {allocationView === 'bot' ? (
+                            <table className="w-full text-left whitespace-nowrap">
+                                <thead className="bg-bg/80 text-muted border-b border-border sticky top-0">
+                                    <tr>
+                                        <th className={thClass}>Algorithm</th>
+                                        <th className={`${thClass} text-right`}>Pool</th>
+                                        <th className={`${thClass} text-right`}>Per entry</th>
+                                        <th className={`${thClass} text-right`}>Max positions</th>
+                                        <th className={`${thClass} text-right`}>Max exposure</th>
+                                        <th className={`${thClass} text-right`}>Order cap</th>
+                                        <th className={`${thClass} text-right`}>Deployed now</th>
+                                        <th className={thClass}>Pairs</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="text-[11px]">
+                                    {allocation.byBot.map(r => (
+                                        <tr key={r.key} className="border-b border-border/40 hover:bg-text/[0.03] transition-colors">
+                                            <td className="px-4 py-2.5 font-bold text-text">
+                                                <div className="flex items-center gap-2 min-w-0">
+                                                    <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${r.isActive ? 'bg-success animate-pulse' : 'bg-faint/40'}`} />
+                                                    <span className="truncate max-w-[220px]" title={r.label}>{r.label}</span>
+                                                    {r.timeframe && <span className="text-[9px] font-num text-accent">{r.timeframe}</span>}
+                                                    <Badge variant={MODE_BADGE_VARIANT[r.mode] || 'neutral'} className="text-[8px]!">{r.mode}</Badge>
+                                                </div>
+                                            </td>
+                                            <td className="px-4 py-2.5 text-right font-num font-bold text-text">${safeNum(r.pool, 0)}</td>
+                                            <td className="px-4 py-2.5 text-right font-num text-muted">
+                                                ${safeNum(r.entryUsd, 0)} <span className="text-faint">({r.isFixed ? 'fixed' : `${safeNum(r.entryPct, 0)}%`})</span>
+                                            </td>
+                                            <td className="px-4 py-2.5 text-right font-num text-muted">{r.maxPositions}</td>
+                                            <td className="px-4 py-2.5 text-right font-num text-muted">
+                                                ${safeNum(r.exposureUsd, 0)} <span className="text-faint">({safeNum(r.exposurePct, 0)}%)</span>
+                                            </td>
+                                            <td className={`px-4 py-2.5 text-right font-num ${r.cap > 0 ? 'text-muted' : 'text-faint'}`}>{r.cap > 0 ? `$${safeNum(r.cap, 0)}` : (r.mode === 'live' ? 'none!' : '—')}</td>
+                                            <td className="px-4 py-2.5 text-right font-num">
+                                                {r.openCount > 0 ? (
+                                                    <span className="text-accent font-bold">${safeNum(r.deployed, 0)} <span className="text-faint font-normal">· {r.openCount} open · ${safeNum(r.free, 0)} free</span></span>
+                                                ) : <span className="text-faint">idle · ${safeNum(r.pool, 0)} free</span>}
+                                            </td>
+                                            <td className="px-4 py-2.5 font-num text-muted">
+                                                <span className="text-text font-bold">{r.symbols.length}</span>
+                                                <span className="text-faint ml-1.5 truncate inline-block max-w-[260px] align-bottom" title={r.symbols.join(', ')}>{r.symbols.join(', ')}</span>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        ) : (
+                            <table className="w-full text-left whitespace-nowrap">
+                                <thead className="bg-bg/80 text-muted border-b border-border sticky top-0">
+                                    <tr>
+                                        <th className={thClass}>Pair</th>
+                                        <th className={`${thClass} text-right`}>Algorithms</th>
+                                        <th className={`${thClass} text-right`}>Pool access</th>
+                                        <th className={`${thClass} text-right`}>Max per entry</th>
+                                        <th className={`${thClass} text-right`}>Deployed now</th>
+                                        <th className={thClass}>Traded by</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="text-[11px]">
+                                    {allocation.byPair.map(r => (
+                                        <tr key={r.key} className="border-b border-border/40 hover:bg-text/[0.03] transition-colors">
+                                            <td className="px-4 py-2.5 font-bold text-text">{r.label}</td>
+                                            <td className="px-4 py-2.5 text-right font-num text-muted">{r.bots.length}</td>
+                                            <td className="px-4 py-2.5 text-right font-num text-muted" title="Sum of the pools this pair competes for — shared with the other pairs of each algorithm">${safeNum(r.poolAccess, 0)}</td>
+                                            <td className="px-4 py-2.5 text-right font-num text-muted" title="What one entry signal on this pair may commit, summed over all algorithms">${safeNum(r.maxEntry, 0)}</td>
+                                            <td className="px-4 py-2.5 text-right font-num">
+                                                {r.openCount > 0
+                                                    ? <span className="text-accent font-bold">${safeNum(r.deployed, 0)} <span className="text-faint font-normal">· {r.openCount} open</span></span>
+                                                    : <span className="text-faint">idle</span>}
+                                            </td>
+                                            <td className="px-4 py-2.5 font-num text-faint"><span className="truncate inline-block max-w-[320px] align-bottom" title={r.bots.join(', ')}>{r.bots.join(', ')}</span></td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        )}
                     </div>
                 </div>
             )}
