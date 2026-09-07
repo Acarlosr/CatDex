@@ -414,6 +414,71 @@ export default function TradeManager({ setError, bots = [] }) {
         };
     }, [closedPositions, orders, entryTsByPos, bots]);
 
+    // ── Breakdown tables (by algorithm / by pair) ─────────────────────────────
+
+    const breakdownRows = useMemo(() => {
+        const build = (keyFn, labelFn) => {
+            const groups = new Map();
+            for (const p of closedPositions) {
+                const key = keyFn(p);
+                if (!groups.has(key)) groups.set(key, { key, label: labelFn(p), trades: 0, wins: 0, gross: 0, loss: 0, net: 0, modes: new Set(), fees: 0, holdMs: 0, holdN: 0, best: -Infinity, worst: Infinity });
+                const g = groups.get(key);
+                const pnl = p.profit_abs || 0;
+                g.trades += 1;
+                if (pnl > 0) { g.wins += 1; g.gross += pnl; } else { g.loss += Math.abs(pnl); }
+                g.net += pnl;
+                g.modes.add(p.mode);
+                g.fees += feesByPosId[p.id] || 0;
+                g.best = Math.max(g.best, pnl);
+                g.worst = Math.min(g.worst, pnl);
+                if (p.closed_at && p.created_at) {
+                    const h = new Date(p.closed_at) - new Date(p.created_at);
+                    if (h > 0) { g.holdMs += h; g.holdN += 1; }
+                }
+            }
+            return [...groups.values()].map(g => {
+                const bot = bots.find(b => b.name === g.key);
+                const capital = bot?.settings?.backtest_capital || null;
+                return {
+                    ...g,
+                    modes: [...g.modes],
+                    winRate: g.trades ? (g.wins / g.trades) * 100 : 0,
+                    profitFactor: g.loss > 0 ? g.gross / g.loss : (g.gross > 0 ? Infinity : 0),
+                    avgHoldMs: g.holdN ? g.holdMs / g.holdN : 0,
+                    capital,
+                    returnPct: capital ? (g.net / capital) * 100 : null,
+                    engineDD: bot?.settings?.last_backtest_max_drawdown ?? null,
+                    timeframe: bot?.settings?.timeframe || tfByBot[g.key] || null,
+                    isActive: !!bot?.is_active,
+                };
+            }).sort((a, b) => b.net - a.net);
+        };
+        return {
+            byBot: build(p => p.bot_name, p => p.bot_name),
+            bySymbol: build(p => `${p.exchange || 'okx'}:${p.symbol}`, p => p.symbol),
+        };
+    }, [closedPositions, feesByPosId, bots, tfByBot]);
+
+    const [breakdownView, setBreakdownView] = useState('bot');
+
+    // ── Monthly net PNL (last 12 months with activity) ────────────────────────
+
+    const monthlyReturns = useMemo(() => {
+        const months = new Map();
+        for (const p of closedPositions) {
+            if (!p.closed_at) continue;
+            const d = new Date(p.closed_at);
+            const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+            const m = months.get(key) || { key, net: 0, trades: 0 };
+            m.net += p.profit_abs || 0;
+            m.trades += 1;
+            months.set(key, m);
+        }
+        const rows = [...months.values()].sort((a, b) => a.key.localeCompare(b.key)).slice(-12);
+        const maxAbs = rows.reduce((m, r) => Math.max(m, Math.abs(r.net)), 0) || 1;
+        return rows.map(r => ({ ...r, share: Math.abs(r.net) / maxAbs, label: new Date(`${r.key}-01T00:00:00Z`).toLocaleDateString(undefined, { month: 'short', year: '2-digit', timeZone: 'UTC' }) }));
+    }, [closedPositions]);
+
     // ── Equity curve data ─────────────────────────────────────────────────────
 
     const equityCurveData = useMemo(() => {
@@ -766,6 +831,94 @@ export default function TradeManager({ setError, bots = [] }) {
                     {/* price refresh happens silently in the background */}
                 </div>
             </div>
+
+            {/* ── BREAKDOWN + MONTHLY ────────────────────────────────────────── */}
+            {!initialLoading && closedPositions.length > 0 && (
+                <div className="flex flex-col lg:flex-row gap-4">
+                    <div className="terminal-card flex-1 min-w-0 overflow-hidden">
+                        <div className="px-5 py-3.5 border-b border-border bg-bg/40 flex items-center justify-between gap-3 flex-wrap">
+                            <div>
+                                <h2 className="text-[11px] font-bold uppercase tracking-wider text-text">Performance Breakdown</h2>
+                                <p className="text-[9px] text-muted mt-0.5 uppercase tracking-wider">Closed trades in the current filter, best first</p>
+                            </div>
+                            <div className="flex bg-inset rounded-md border border-border overflow-hidden">
+                                {[['bot', 'By algorithm'], ['symbol', 'By pair']].map(([v, l]) => (
+                                    <button key={v} type="button" onClick={() => setBreakdownView(v)}
+                                        className={`px-3 py-1.5 text-[9px] font-bold uppercase tracking-wider transition-colors ${breakdownView === v ? 'bg-accent/10 text-accent' : 'text-muted hover:text-text'}`}>
+                                        {l}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                        <div className="overflow-x-auto max-h-[320px] overflow-y-auto custom-scrollbar">
+                            <table className="w-full text-left whitespace-nowrap">
+                                <thead className="bg-bg/80 text-muted border-b border-border sticky top-0">
+                                    <tr>
+                                        <th className={thClass}>{breakdownView === 'bot' ? 'Algorithm' : 'Pair'}</th>
+                                        <th className={`${thClass} text-right`}>Trades</th>
+                                        <th className={`${thClass} text-right`}>Win rate</th>
+                                        <th className={`${thClass} text-right`}>Net PNL</th>
+                                        {breakdownView === 'bot' && <th className={`${thClass} text-right`}>Return</th>}
+                                        <th className={`${thClass} text-right`}>PF</th>
+                                        {breakdownView === 'bot' && <th className={`${thClass} text-right`}>Max DD</th>}
+                                        <th className={`${thClass} text-right`}>Best / Worst</th>
+                                        <th className={`${thClass} text-right`}>Avg hold</th>
+                                        <th className={`${thClass} text-right`}>Fees</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="text-[11px]">
+                                    {(breakdownView === 'bot' ? breakdownRows.byBot : breakdownRows.bySymbol).map(r => (
+                                        <tr key={r.key} className="border-b border-border/40 hover:bg-text/[0.03] transition-colors">
+                                            <td className="px-4 py-2.5 font-bold text-text">
+                                                <div className="flex items-center gap-2 min-w-0">
+                                                    {breakdownView === 'bot' && <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${r.isActive ? 'bg-success animate-pulse' : 'bg-faint/40'}`} />}
+                                                    <span className="truncate max-w-[220px]" title={r.label}>{r.label}</span>
+                                                    {breakdownView === 'bot' && r.timeframe && <span className="text-[9px] font-num text-accent">{r.timeframe}</span>}
+                                                    {r.modes.map(m => <Badge key={m} variant={MODE_BADGE_VARIANT[m] || 'neutral'} className="text-[8px]!">{m}</Badge>)}
+                                                </div>
+                                            </td>
+                                            <td className="px-4 py-2.5 text-right font-num text-muted">{r.trades} <span className="text-faint">({r.wins}W)</span></td>
+                                            <td className="px-4 py-2.5 text-right font-num text-info">{safeNum(r.winRate, 1)}%</td>
+                                            <td className={`px-4 py-2.5 text-right font-num font-bold ${pnlColor(r.net)}`}>{pnlSign(r.net)}${safeNum(Math.abs(r.net))}</td>
+                                            {breakdownView === 'bot' && (
+                                                <td className={`px-4 py-2.5 text-right font-num ${r.returnPct === null ? 'text-faint' : pnlColor(r.returnPct)}`}>
+                                                    {r.returnPct === null ? '—' : `${pnlSign(r.returnPct)}${safeNum(r.returnPct, 1)}%`}
+                                                    {r.capital && <span className="text-faint ml-1">on ${safeNum(r.capital, 0)}</span>}
+                                                </td>
+                                            )}
+                                            <td className="px-4 py-2.5 text-right font-num text-muted">{r.profitFactor === Infinity ? '∞' : safeNum(r.profitFactor)}</td>
+                                            {breakdownView === 'bot' && (
+                                                <td className="px-4 py-2.5 text-right font-num text-danger">{r.engineDD !== null ? `-${safeNum(r.engineDD, 1)}%` : '—'}</td>
+                                            )}
+                                            <td className="px-4 py-2.5 text-right font-num"><span className="text-success">+${safeNum(Math.max(0, r.best))}</span> <span className="text-faint">/</span> <span className="text-danger">-${safeNum(Math.abs(Math.min(0, r.worst)))}</span></td>
+                                            <td className="px-4 py-2.5 text-right font-num text-muted">{r.avgHoldMs ? formatHoldTime(r.avgHoldMs) : '—'}</td>
+                                            <td className="px-4 py-2.5 text-right font-num text-muted">${safeNum(r.fees)}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div className="terminal-card p-5 lg:w-[340px] shrink-0">
+                        <div className="mb-4">
+                            <h2 className="text-[11px] font-bold uppercase tracking-wider text-text">Monthly Net PNL</h2>
+                            <p className="text-[9px] text-muted mt-0.5 uppercase tracking-wider">By close date (UTC) · last {monthlyReturns.length} months</p>
+                        </div>
+                        <div className="space-y-2 max-h-[280px] overflow-y-auto custom-scrollbar pr-1">
+                            {monthlyReturns.map(m => (
+                                <div key={m.key} className="flex items-center gap-3">
+                                    <span className="text-[9px] font-num text-muted w-14 shrink-0">{m.label}</span>
+                                    <div className="flex-1 h-2 bg-border/60 rounded-full overflow-hidden flex">
+                                        <div className={`h-full rounded-full ${m.net >= 0 ? 'bg-success' : 'bg-danger'}`} style={{ width: `${Math.max(2, m.share * 100)}%` }} />
+                                    </div>
+                                    <span className={`text-[10px] font-num font-bold w-20 text-right shrink-0 ${pnlColor(m.net)}`} title={`${m.trades} trades`}>{pnlSign(m.net)}${safeNum(Math.abs(m.net), 0)}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* ── ACTIVE POSITIONS ───────────────────────────────────────────── */}
             {activePositions.length > 0 && (

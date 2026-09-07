@@ -102,9 +102,13 @@ export default function App() {
   const refetchBots = useCallback(async () => {
     try {
       const res = await apiClient.get('/api/bots/summary');
-      setAllBots(res.data);
+      const list = Array.isArray(res.data) ? res.data : [];
+      setAllBots(list);
       setBackendOk(true);
-      pollIntervalRef.current = 15000;
+      // Poll fast while any bot is still starting up (fetching data /
+      // backtesting) so the cards show live progress; relax once all are idle
+      const transitional = list.some(b => b.is_active && ['starting', 'fetching', 'backtesting'].includes(b.runtime?.phase));
+      pollIntervalRef.current = transitional ? 2500 : 15000;
     } catch {
       setBackendOk(false);
       pollIntervalRef.current = Math.min(pollIntervalRef.current * 2, 60000);
@@ -143,11 +147,16 @@ export default function App() {
     };
 
     window.addEventListener('open-builder', handleOpenBuilder);
+    // Bot cards ask for an immediate refresh right after start/stop so the
+    // new phase shows up without waiting for the next scheduled poll
+    const handleRefresh = () => { refetchBots(); };
+    window.addEventListener('refresh-bots', handleRefresh);
 
     return () => {
       cancelled = true;
       clearTimeout(botTimer);
       window.removeEventListener('open-builder', handleOpenBuilder);
+      window.removeEventListener('refresh-bots', handleRefresh);
     };
   }, [refetchBots, hasApiKey]);
 
@@ -187,6 +196,13 @@ export default function App() {
     }
     if (window.innerWidth < 768) setSidebarOpen(false);
   };
+
+  // Bot cards open their pair charts via a window event (same pattern as open-builder)
+  useEffect(() => {
+    const handler = (e) => { if (e.detail) openBotChart(e.detail); };
+    window.addEventListener('open-bot-chart', handler);
+    return () => window.removeEventListener('open-bot-chart', handler);
+  });
 
   const closeChart = (chartId, e) => {
     e.stopPropagation();

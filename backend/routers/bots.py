@@ -95,7 +95,12 @@ def get_bots_summary(db: Session = Depends(get_db)):
                 # same pair on another exchange is a different dataset
                 "data_exchange": b.settings.get("data_exchange", "okx") if b.settings else "okx",
                 "last_backtest_max_drawdown": b.settings.get("last_backtest_max_drawdown") if b.settings else None,
-            }
+                "last_backtest_summary": b.settings.get("last_backtest_summary") if b.settings else None,
+                "last_stop_reason": b.settings.get("last_stop_reason") if b.settings else None,
+                "max_drawdown": b.settings.get("max_drawdown") if b.settings else None,
+            },
+            # In-memory engine phase (starting / fetching / backtesting / live / halted)
+            "runtime": bot_manager.get_runtime(b.name),
         }
         for b in bots
     ]
@@ -237,6 +242,7 @@ def update_bot(bot_id: int, background_tasks: BackgroundTasks, bot_data: dict = 
             raise HTTPException(status_code=400, detail="A bot with this name already exists.")
         old_name = bot.name
         bot.name = new_name
+        bot_manager.rename_runtime(old_name, new_name)
         db.query(Signal).filter(Signal.bot_name == old_name).update({"bot_name": new_name}, synchronize_session=False)
         db.query(Order).filter(Order.bot_name == old_name).update({"bot_name": new_name}, synchronize_session=False)
         db.query(Position).filter(Position.bot_name == old_name).update({"bot_name": new_name}, synchronize_session=False)
@@ -334,26 +340,75 @@ def delete_bot(bot_id: int, background_tasks: BackgroundTasks, db: Session = Dep
     background_tasks.add_task(_cleanup_bot_data, bot_name)
     return {"message": f"Bot '{bot_name}' deleted.", "is_active": False}
 
+async def _start(bot: BotConfig, db: Session):
+    bot.is_active = True
+    if bot.settings and bot.settings.get("last_stop_reason"):
+        bot.settings = {**bot.settings, "last_stop_reason": None}
+        flag_modified(bot, "settings")
+    db.commit()
+    # Show "queued" immediately — the engine thread replaces this within ms
+    bot_manager.set_runtime(bot.name, "starting", "Queued for startup…")
+    await event_bus.publish("BOT_STATE_CHANGED", {"bot_id": bot.id, "action": "started"})
+
+
+async def _stop(bot: BotConfig, db: Session):
+    bot.is_active = False
+    db.commit()
+    bot_manager.clear_runtime(bot.name)
+    await event_bus.publish("BOT_STATE_CHANGED", {"bot_id": bot.id, "action": "stopped"})
+
+
+@router.post("/bulk/start")
+async def start_all_bots(ids: Optional[List[int]] = Body(default=None), db: Session = Depends(get_db)):
+    """Start every stopped bot (or the given ids). The engine backfills them
+    concurrently; each bot reports its own phase in /summary."""
+    q = db.query(BotConfig).filter(BotConfig.is_active == False)
+    if ids:
+        q = q.filter(BotConfig.id.in_(ids))
+    started = []
+    for bot in q.all():
+        await _start(bot, db)
+        started.append(bot.name)
+    return {"started": started}
+
+
+@router.post("/bulk/stop")
+async def stop_all_bots(ids: Optional[List[int]] = Body(default=None), db: Session = Depends(get_db)):
+    q = db.query(BotConfig).filter(BotConfig.is_active == True)
+    if ids:
+        q = q.filter(BotConfig.id.in_(ids))
+    stopped = []
+    for bot in q.all():
+        await _stop(bot, db)
+        stopped.append(bot.name)
+    return {"stopped": stopped}
+
+
 @router.post("/{bot_id}/start")
 async def start_bot(bot_id: int, db: Session = Depends(get_db)):
     bot = db.query(BotConfig).filter(BotConfig.id == bot_id).first()
     if not bot: raise HTTPException(status_code=404, detail="Bot not found.")
     if bot.is_active: raise HTTPException(status_code=400, detail="Already active.")
-
-    bot.is_active = True
-    db.commit()
-    await event_bus.publish("BOT_STATE_CHANGED", {"bot_id": bot.id, "action": "started"})
+    await _start(bot, db)
     return {"message": f"Bot '{bot.name}' started.", "is_active": True}
 
 @router.post("/{bot_id}/stop")
 async def stop_bot(bot_id: int, db: Session = Depends(get_db)):
     bot = db.query(BotConfig).filter(BotConfig.id == bot_id).first()
     if not bot: raise HTTPException(status_code=404, detail="Bot not found.")
-
-    bot.is_active = False
-    db.commit()
-    await event_bus.publish("BOT_STATE_CHANGED", {"bot_id": bot.id, "action": "stopped"})
+    await _stop(bot, db)
     return {"message": f"Bot '{bot.name}' stopped.", "is_active": False}
+
+@router.post("/{bot_id}/restart")
+async def restart_bot(bot_id: int, db: Session = Depends(get_db)):
+    """Stop + start in one call. A fresh run token makes the previous startup
+    thread (if still backfilling) abort instead of running twice."""
+    bot = db.query(BotConfig).filter(BotConfig.id == bot_id).first()
+    if not bot: raise HTTPException(status_code=404, detail="Bot not found.")
+    if bot.is_active:
+        await _stop(bot, db)
+    await _start(bot, db)
+    return {"message": f"Bot '{bot.name}' restarted.", "is_active": True}
 
 @router.post("/{bot_id}/duplicate")
 def duplicate_bot(bot_id: int, db: Session = Depends(get_db)):

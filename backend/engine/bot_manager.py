@@ -91,6 +91,45 @@ class BotManager:
         self._processed_candles = {}  # (exchange, symbol, timeframe) -> last processed candle ts
         self._balance_cache = {}  # (key_name, quote_ccy) -> (fetched_at, free_balance)
         self._bg_tasks = set()  # strong refs so fire-and-forget tasks are not GC'd mid-flight
+        self._runtime = {}  # bot_name -> {phase, detail, progress, mode, updated_at, ...}
+        self._runtime_lock = threading.Lock()
+        self._run_tokens = {}  # bot_id -> token of the current startup thread
+
+    # ── Runtime status (what the UI shows while a bot is starting/running) ──
+    def set_runtime(self, bot_name: str, phase: str, detail: str = "", progress=None, **extra):
+        with self._runtime_lock:
+            self._runtime[bot_name] = {
+                "phase": phase,
+                "detail": detail,
+                "progress": progress,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                **extra,
+            }
+
+    def clear_runtime(self, bot_name: str):
+        with self._runtime_lock:
+            self._runtime.pop(bot_name, None)
+
+    def get_runtime(self, bot_name: str):
+        with self._runtime_lock:
+            rt = self._runtime.get(bot_name)
+            return dict(rt) if rt else None
+
+    def rename_runtime(self, old_name: str, new_name: str):
+        with self._runtime_lock:
+            if old_name in self._runtime:
+                self._runtime[new_name] = self._runtime.pop(old_name)
+
+    def _engine_stop(self, bot, db, reason: str):
+        """Stop a bot from inside the engine and remember why, so the card can
+        show the reason after the fact (a user stop clears it)."""
+        bot.is_active = False
+        try:
+            bot.settings = {**(bot.settings or {}), "last_stop_reason": reason}
+            flag_modified(bot, "settings")
+        except Exception:
+            pass
+        self.set_runtime(bot.name, "halted", reason)
 
     def _spawn(self, coro):
         task = asyncio.create_task(coro)
@@ -582,14 +621,34 @@ class BotManager:
             db.rollback()
             logger.warning("Could not flush previous backtest data for '%s': %s", bot_name, exc)
 
+    def _still_active(self, bot_id: int, token=None) -> bool:
+        """Fresh-session check so a user stop during backfill/backtest is
+        honoured. A stop+start (restart) issues a new run token, so the
+        superseded thread also bails out instead of running twice."""
+        if token is not None and self._run_tokens.get(bot_id) != token:
+            return False
+        _db = SessionLocal()
+        try:
+            row = _db.query(BotConfig.is_active).filter(BotConfig.id == bot_id).first()
+            return bool(row and row[0])
+        finally:
+            _db.close()
+
+    class _StoppedByUser(Exception):
+        pass
+
     def _execute_sync_backfill(self, bot_id: int):
         db = SessionLocal()
         _log_name = f"bot_id={bot_id}"
+        _run_token = None
         try:
             bot = db.query(BotConfig).filter(BotConfig.id == bot_id).first()
             if not bot or not bot.is_active: return
             _log_name = bot.name
+            _run_token = object()
+            self._run_tokens[bot_id] = _run_token
             self._backfilling_bots.add(bot.name)
+            self.set_runtime(bot.name, "starting", "Preparing engine…")
 
             is_api_exec = bot.settings.get("api_execution", False)
             has_key = bool(bot.settings.get("api_key_name"))
@@ -673,9 +732,12 @@ class BotManager:
                         _db.close()
 
                 initial_count = _count_candles()
+                sym_idx = symbols.index(symbol) + 1
                 if initial_count < lookback_limit:
                     logger.info("Waiting for candle data: %s (%d/%d candles)...", symbol, initial_count, lookback_limit)
                     blb.push(bot.name, "INFO", f"Fetching historical data: {symbol} ({initial_count}/{lookback_limit} candles)...")
+                    self.set_runtime(bot.name, "fetching", f"{symbol} · {initial_count}/{lookback_limit} candles",
+                                     {"done": initial_count, "total": lookback_limit}, symbol=symbol, symbol_index=sym_idx, symbol_count=len(symbols))
 
                     max_wait = 300  # 5 minutes max
                     waited = 0
@@ -686,7 +748,12 @@ class BotManager:
                     while waited < max_wait:
                         time.sleep(2)
                         waited += 2
+                        if not self._still_active(bot_id, _run_token):
+                            raise self._StoppedByUser()
                         current_count = _count_candles()
+                        if current_count != last_count:
+                            self.set_runtime(bot.name, "fetching", f"{symbol} · {current_count}/{lookback_limit} candles",
+                                             {"done": min(current_count, lookback_limit), "total": lookback_limit}, symbol=symbol, symbol_index=sym_idx, symbol_count=len(symbols))
 
                         # Log progress when count changes significantly
                         if current_count - last_log_count >= 100:
@@ -769,6 +836,9 @@ class BotManager:
 
                 if run_backtest:
                     blb.push(bot.name, "INFO", f"Running backtest on {len(df)} candles...")
+                    self.set_runtime(bot.name, "backtesting", f"{symbol} · {len(df)} candles", symbol=symbol, symbol_index=sym_idx, symbol_count=len(symbols))
+                else:
+                    self.set_runtime(bot.name, "starting", f"Computing indicators for {symbol}…")
                     last_order = db.query(Order).filter(Order.bot_name == bot.name, Order.symbol == symbol, Order.mode == "backtest").order_by(Order.timestamp.desc()).first()
                     if last_order:
                         last_bt_ts = last_order.timestamp
@@ -804,11 +874,14 @@ class BotManager:
                 reason = ", ".join(empty_symbols) if empty_symbols else "any configured symbol"
                 logger.warning("Bot '%s' stopped: no candle data for %s", bot.name, reason)
                 blb.push(bot.name, "ERROR", f"Stopped: no historical data for {reason}. Fix the pair/timeframe or try again once the exchange responds.")
-                bot.is_active = False
+                self._engine_stop(bot, db, f"No historical data for {reason}")
                 db.commit()
                 return
             if empty_symbols:
                 blb.push(bot.name, "WARN", f"No data for {', '.join(empty_symbols)} — continuing with the remaining symbol(s).")
+
+            if not self._still_active(bot_id, _run_token):
+                raise self._StoppedByUser()
 
             # ── Merged chronological execution across all symbols ──
             timeline = []
@@ -820,8 +893,16 @@ class BotManager:
             timeline.sort(key=lambda t: (t[0], t[1]))
 
             max_pos = _int(bot.settings.get("max_positions"), 1)
+            _tl_total = len(timeline)
+            _tl_step = max(1, _tl_total // 40)
+            if run_backtest:
+                self.set_runtime(bot.name, "backtesting", f"Simulating {_tl_total} candles across {len(sym_contexts)} symbol(s)", {"done": 0, "total": _tl_total})
 
-            for _ts_key, ci, index in timeline:
+            for _tl_i, (_ts_key, ci, index) in enumerate(timeline):
+                if run_backtest and _tl_i % _tl_step == 0:
+                    self.set_runtime(bot.name, "backtesting", f"Simulating {_tl_i}/{_tl_total} candles", {"done": _tl_i, "total": _tl_total})
+                    if not self._still_active(bot_id, _run_token):
+                        raise self._StoppedByUser()
                 ctx = sym_contexts[ci]
                 symbol = ctx["symbol"]
                 row = ctx["df"].iloc[index]
@@ -988,6 +1069,8 @@ class BotManager:
             # Always commit — positions/orders from the backtest loop need to be persisted
             # even when there are no new signals
             db.commit()
+            if not self._still_active(bot_id, _run_token):
+                raise self._StoppedByUser()
 
             for ctx in sym_contexts:
                 trade_count = len(ctx["trade_entry_indices"]) if run_backtest else 0
@@ -1004,7 +1087,22 @@ class BotManager:
                 # can show the number the gate actually enforces (the
                 # closed-trade curve in the UI understates intra-trade dips)
                 try:
-                    bot.settings = {**bot.settings, "last_backtest_max_drawdown": round(bt_max_dd, 2)}
+                    closed_bt = db.query(Position.profit_abs).filter(
+                        Position.bot_name == bot.name, Position.mode == "backtest", Position.status == "closed"
+                    ).all()
+                    pnls = [float(p[0] or 0) for p in closed_bt]
+                    wins = sum(1 for p in pnls if p > 0)
+                    summary = {
+                        "trades": len(pnls),
+                        "wins": wins,
+                        "net_pnl": round(sum(pnls), 2),
+                        "win_rate": round(100.0 * wins / len(pnls), 1) if pnls else 0.0,
+                        "return_pct": round(100.0 * sum(pnls) / bt_starting_capital, 2) if bt_starting_capital else 0.0,
+                        "max_drawdown": round(bt_max_dd, 2),
+                        "candles": sum(len(c["df"]) for c in sym_contexts),
+                        "finished_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    bot.settings = {**bot.settings, "last_backtest_max_drawdown": round(bt_max_dd, 2), "last_backtest_summary": summary}
                     flag_modified(bot, "settings")
                     db.commit()
                 except Exception:
@@ -1016,7 +1114,7 @@ class BotManager:
                     if bt_max_dd >= max_drawdown_pct:
                         logger.warning("Bot '%s' backtest drawdown (%.2f%%) exceeds max (%.2f%%), stopping before live", bot.name, bt_max_dd, max_drawdown_pct)
                         blb.push(bot.name, "WARN", f"Backtest max drawdown {bt_max_dd:.2f}% >= {max_drawdown_pct:.2f}%, bot stopped — not allowed to go live")
-                        bot.is_active = False
+                        self._engine_stop(bot, db, f"Backtest drawdown {bt_max_dd:.1f}% exceeded the {max_drawdown_pct:.0f}% limit")
                         db.commit()
                         return
 
@@ -1026,15 +1124,32 @@ class BotManager:
                 tf_secs = _tf_seconds(timeframe)
                 next_close = datetime.fromtimestamp(((int(time.time()) // tf_secs) + 1) * tf_secs, tz=timezone.utc)
                 blb.push(bot.name, "INFO", f"Live monitoring active ({live_mode}) — next {timeframe} candle closes ~{next_close.strftime('%H:%M')} UTC")
+                self.set_runtime(bot.name, "live", f"Waiting for next {timeframe} candle close", mode=live_mode, next_close=next_close.isoformat())
             except Exception:
                 blb.push(bot.name, "INFO", f"Live monitoring active ({live_mode}) — waiting for the next {timeframe} candle close")
+                self.set_runtime(bot.name, "live", f"Waiting for next {timeframe} candle close", mode=live_mode)
 
+        except self._StoppedByUser:
+            db.rollback()
+            if self._run_tokens.get(bot_id) is _run_token:
+                blb.push(_log_name, "INFO", "Stopped by user — startup aborted.")
+                self.clear_runtime(_log_name)
         except Exception as e:
             logger.error("Backfill Error: %s", e, exc_info=True)
             blb.push(_log_name, "ERROR", f"Backfill error: {e}")
             db.rollback()
+            try:
+                bot = db.query(BotConfig).filter(BotConfig.id == bot_id).first()
+                if bot and bot.is_active:
+                    self._engine_stop(bot, db, f"Startup error: {str(e)[:160]}")
+                    db.commit()
+            except Exception:
+                db.rollback()
         finally:
-            self._backfilling_bots.discard(_log_name)
+            # A superseded thread (restart) must not unmask the bot while the
+            # replacement thread is still backfilling
+            if self._run_tokens.get(bot_id) is _run_token:
+                self._backfilling_bots.discard(_log_name)
             db.close()
 
     async def _process_bots(self, exchange: str, symbol: str, timeframe: str):
@@ -1157,7 +1272,7 @@ class BotManager:
                             blb.push(bot.name, "WARN", f"Max drawdown hit ({dd_state['max_dd']:.2f}% >= {max_drawdown_pct:.2f}%), auto-stopping")
                             blb.push(bot.name, "WARN", "Closing all open positions before stopping — a stopped bot no longer manages SL/TP")
                             self._close_all_open_positions(bot, db, key_records)
-                            bot.is_active = False
+                            self._engine_stop(bot, db, f"Live drawdown {dd_state['max_dd']:.1f}% hit the {max_drawdown_pct:.0f}% limit — positions closed")
                             self._drawdown_cache.pop((bot.name, "live"), None)
                             self._drawdown_cache.pop((bot.name, "backtest"), None)
                             db.commit()
@@ -1193,6 +1308,14 @@ class BotManager:
 
                     tick_action = "BUY signal" if is_buy else ("SELL signal" if is_sell else "no signal")
                     blb.push(bot.name, "INFO", f"Tick {symbol} {timeframe} | close {current_price} | {tick_action}")
+                    try:
+                        _tf_s = _tf_seconds(timeframe)
+                        _next = datetime.fromtimestamp(((int(time.time()) // _tf_s) + 1) * _tf_s, tz=timezone.utc)
+                        _prev_rt = self.get_runtime(bot.name) or {}
+                        self.set_runtime(bot.name, "live", f"Last tick {symbol} @ {current_price:g} — {tick_action}",
+                                         mode=_prev_rt.get("mode"), next_close=_next.isoformat(), last_tick_at=datetime.now(timezone.utc).isoformat())
+                    except Exception:
+                        pass
 
                     is_api_exec = bot.settings.get("api_execution", False)
                     has_key = bool(bot.settings.get("api_key_name"))
@@ -1438,7 +1561,7 @@ class BotManager:
                                         logger.error("%s SELL state unknown for %s (id=%s) — stopping bot '%s'", mode.upper(), symbol, okx_order.get("id"), bot.name)
                                         blb.push(bot.name, "ERROR", f"Order state unknown on {symbol} — verify manually on the exchange before restarting")
                                         db.add(Order(position_id=pos.id, exchange=exchange, bot_name=bot.name, mode=mode, symbol=symbol, side="sell", order_type="market", price=ev['price'], amount=close_qty, timestamp=latest_time, exchange_order_id=okx_order.get("id"), status="unknown"))
-                                        bot.is_active = False
+                                        self._engine_stop(bot, db, f"Sell order state unknown on {symbol} — verify on the exchange before restarting")
                                         db.commit()
                                         break
                                     # Book only what actually sold so a partial fill

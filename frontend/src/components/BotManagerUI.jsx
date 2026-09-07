@@ -48,6 +48,16 @@ const IconStop = (
     <rect x="6.5" y="6.5" width="11" height="11" rx="1.5" strokeLinecap="round" strokeLinejoin="round" />
   </svg>
 );
+const IconRestart = (
+  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8} aria-hidden="true">
+    <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h5M20 20v-5h-5M5.5 9A7.5 7.5 0 0119 7.5M18.5 15A7.5 7.5 0 015 16.5" />
+  </svg>
+);
+const IconChart = (
+  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8} aria-hidden="true">
+    <path strokeLinecap="round" strokeLinejoin="round" d="M4 19V5m0 14h16M8 15l3-4 3 2 4-6" />
+  </svg>
+);
 const IconBotEmpty = (
   <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5} aria-hidden="true">
     <rect x="5" y="8" width="14" height="11" rx="2" strokeLinecap="round" strokeLinejoin="round" />
@@ -77,7 +87,109 @@ function IconButton({ title, onClick, disabled, tone = 'muted', children }) {
   );
 }
 
-const BotCard = memo(function BotCard({ bot, index, busyAction, togglingBot, openConsoles, clearSignals, toggleBotState, handleExport, handleDuplicate, handleClearCacheClick, handleDeleteClick, updateBotConfig, toggleConsole }) {
+const PHASE_META = {
+  starting:    { label: 'Starting',      cls: 'text-accent bg-accent/10 border-accent/30',    pulse: true },
+  fetching:    { label: 'Fetching data', cls: 'text-info bg-info/10 border-info/30',          pulse: true },
+  backtesting: { label: 'Backtesting',   cls: 'text-purple bg-purple/10 border-purple/30',    pulse: true },
+  live:        { label: 'Monitoring',    cls: 'text-success bg-success/10 border-success/30', pulse: false },
+};
+const MODE_LABEL = { live: 'live orders', paper: 'paper (sandbox)', forward_test: 'forward test' };
+
+const fmtMoney = (v) => `${v < 0 ? '-' : '+'}$${Math.abs(Number(v) || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+const fmtClock = (iso) => {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+};
+
+/* Engine phase strip: what the bot is doing right now, with progress */
+function RuntimeStrip({ bot }) {
+  const rt = bot.runtime;
+  if (!bot.is_active) return null;
+  const meta = PHASE_META[rt?.phase] || { label: 'Running', cls: 'text-success bg-success/10 border-success/30' };
+  const pct = rt?.progress?.total ? Math.min(100, Math.round((rt.progress.done / rt.progress.total) * 100)) : null;
+  const nextClose = rt?.phase === 'live' ? fmtClock(rt.next_close) : null;
+  const symbolPos = rt?.symbol_count > 1 && rt?.symbol_index ? ` (${rt.symbol_index}/${rt.symbol_count})` : '';
+  return (
+    <div className="px-5 py-2.5 border-b border-border bg-inset/40">
+      <div className="flex items-center gap-2.5 min-w-0">
+        <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-sm border text-[9px] font-bold uppercase tracking-wider shrink-0 ${meta.cls}`}>
+          {meta.pulse && <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />}
+          {meta.label}
+          {rt?.phase === 'live' && rt.mode && <span className="font-medium normal-case tracking-normal opacity-80">· {MODE_LABEL[rt.mode] || rt.mode}</span>}
+        </span>
+        <span className="text-[10px] text-text-secondary font-num truncate flex-1" title={rt?.detail}>
+          {rt?.detail || 'Engine active'}{symbolPos}
+        </span>
+        {nextClose && <span className="text-[9px] text-faint font-num shrink-0">next candle {nextClose}</span>}
+        {pct !== null && <span className="text-[9px] text-muted font-num shrink-0">{pct}%</span>}
+      </div>
+      {pct !== null && (
+        <div className="mt-2 h-1 rounded-full bg-border overflow-hidden">
+          <div
+            className={`h-full rounded-full transition-[width] duration-500 ${rt.phase === 'backtesting' ? 'bg-purple' : 'bg-info'}`}
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* Why the engine stopped this bot on its own (cleared on next start) */
+function StopReason({ bot }) {
+  const reason = bot.settings?.last_stop_reason;
+  if (bot.is_active || !reason) return null;
+  return (
+    <div className="px-5 py-2.5 border-b border-warn/30 bg-warn/[0.06] flex items-start gap-2">
+      <svg className="w-3.5 h-3.5 text-warn shrink-0 mt-px" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M12 3l9 16H3l9-16z" />
+      </svg>
+      <p className="text-[10px] text-warn leading-snug"><span className="font-bold uppercase tracking-wider mr-1">Stopped by engine</span>{reason}</p>
+    </div>
+  );
+}
+
+/* Result of the most recent backtest run, persisted by the engine */
+function BacktestSummary({ bot }) {
+  const s = bot.settings?.last_backtest_summary;
+  if (!s) return null;
+  const good = s.net_pnl >= 0;
+  const limit = Number(bot.settings?.max_drawdown) || 0;
+  const ddHit = limit > 0 && s.max_drawdown >= limit;
+  return (
+    <div className="flex flex-col space-y-2 border-t border-border pt-4">
+      <div className="flex justify-between items-end">
+        <span className="text-[9px] font-bold text-muted uppercase tracking-wider">Last Backtest</span>
+        {s.finished_at && <span className="text-[8px] text-faint font-num">{new Date(s.finished_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</span>}
+      </div>
+      <div className="grid grid-cols-4 gap-2">
+        <div className="bg-inset border border-border rounded-md px-2.5 py-2">
+          <p className="text-[8px] font-bold uppercase tracking-wider text-faint">Net PNL</p>
+          <p className={`text-[11px] font-num font-bold ${good ? 'text-success' : 'text-danger'}`}>{fmtMoney(s.net_pnl)}</p>
+          <p className={`text-[8px] font-num ${good ? 'text-success/70' : 'text-danger/70'}`}>{s.return_pct >= 0 ? '+' : ''}{s.return_pct}%</p>
+        </div>
+        <div className="bg-inset border border-border rounded-md px-2.5 py-2">
+          <p className="text-[8px] font-bold uppercase tracking-wider text-faint">Trades</p>
+          <p className="text-[11px] font-num font-bold text-text">{s.trades}</p>
+          <p className="text-[8px] font-num text-muted">{s.wins}W / {s.trades - s.wins}L</p>
+        </div>
+        <div className="bg-inset border border-border rounded-md px-2.5 py-2">
+          <p className="text-[8px] font-bold uppercase tracking-wider text-faint">Win rate</p>
+          <p className="text-[11px] font-num font-bold text-info">{s.win_rate}%</p>
+          <p className="text-[8px] font-num text-muted">{s.candles} candles</p>
+        </div>
+        <div className={`bg-inset border rounded-md px-2.5 py-2 ${ddHit ? 'border-danger/40' : 'border-border'}`}>
+          <p className="text-[8px] font-bold uppercase tracking-wider text-faint">Max DD</p>
+          <p className={`text-[11px] font-num font-bold ${ddHit ? 'text-danger' : 'text-warn'}`}>-{s.max_drawdown}%</p>
+          <p className="text-[8px] font-num text-muted">{limit > 0 ? `limit ${limit}%` : 'no limit'}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const BotCard = memo(function BotCard({ bot, index, busyAction, togglingBot, openConsoles, clearSignals, toggleBotState, restartBot, handleExport, handleDuplicate, handleClearCacheClick, handleDeleteClick, updateBotConfig, toggleConsole }) {
   const isBacktestOn     = bot.settings?.backtest_on_start === true;
   const isApiExecutionOn = bot.settings?.api_execution === true;
   const hasApiKey        = !!bot.settings?.api_key_name;
@@ -137,18 +249,27 @@ const BotCard = memo(function BotCard({ bot, index, busyAction, togglingBot, ope
           </div>
         </div>
 
-        <Button
-          variant={bot.is_active ? 'danger' : 'success'}
-          size="md"
-          loading={isToggling}
-          icon={bot.is_active ? IconStop : IconPlay}
-          onClick={() => toggleBotState(bot.id, bot.is_active)}
-          title={bot.is_active ? 'Stop this bot' : 'Start the trading engine'}
-          className="shrink-0"
-        >
-          {bot.is_active ? 'Stop' : 'Start'}
-        </Button>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {bot.is_active && (
+            <IconButton title="Restart (stop + fresh start)" onClick={() => restartBot(bot.id)} disabled={isToggling}>
+              {IconRestart}
+            </IconButton>
+          )}
+          <Button
+            variant={bot.is_active ? 'danger' : 'success'}
+            size="md"
+            loading={isToggling}
+            icon={bot.is_active ? IconStop : IconPlay}
+            onClick={() => toggleBotState(bot.id, bot.is_active)}
+            title={bot.is_active ? 'Stop this bot (safe at any point — a startup in progress is aborted)' : 'Start the trading engine'}
+          >
+            {bot.is_active ? 'Stop' : 'Start'}
+          </Button>
+        </div>
       </div>
+
+      <RuntimeStrip bot={bot} />
+      <StopReason bot={bot} />
 
       {/* ── Card Body ── */}
       <div className="px-5 py-4 flex-1 flex flex-col space-y-5">
@@ -192,10 +313,12 @@ const BotCard = memo(function BotCard({ bot, index, busyAction, togglingBot, ope
             />
             <div className="ml-3 flex flex-col">
               <span className={`text-[11px] font-bold uppercase tracking-wider ${isBacktestOn ? 'text-success' : 'text-text'}`}>Run Historical Backtest</span>
-              <span className="text-[9px] text-muted mt-0.5">Process past data before executing live.</span>
+              <span className="text-[9px] text-muted mt-0.5">Process past data before executing live. Previous backtest results are cleared automatically on every run.</span>
             </div>
           </label>
         </div>
+
+        <BacktestSummary bot={bot} />
       </div>
 
       {/* ── Console Toggle Bar ── */}
@@ -231,6 +354,9 @@ const BotCard = memo(function BotCard({ bot, index, busyAction, togglingBot, ope
           >
             {IconEdit}
           </IconButton>
+          <IconButton title="Open charts for this bot's pairs" tone="info" onClick={() => window.dispatchEvent(new CustomEvent('open-bot-chart', { detail: bot }))}>
+            {IconChart}
+          </IconButton>
           <IconButton title="Export bot as .apex.json" onClick={() => handleExport(bot)}>
             {IconExport}
           </IconButton>
@@ -239,7 +365,7 @@ const BotCard = memo(function BotCard({ bot, index, busyAction, togglingBot, ope
           </IconButton>
           <div className="w-px h-3.5 bg-border mx-1" />
           <IconButton
-            title="Wipe chart cache (signals & logs)"
+            title="Reset signals & console logs (this also happens automatically when you edit or re-run a backtest)"
             tone="warn"
             disabled={bot.is_active || !!busyAction}
             onClick={() => handleClearCacheClick(bot)}
@@ -267,6 +393,7 @@ const BotCard = memo(function BotCard({ bot, index, busyAction, togglingBot, ope
   (prev.togglingBot === prev.bot.id) === (next.togglingBot === next.bot.id) &&
   prev.openConsoles[prev.bot.id] === next.openConsoles[next.bot.id] &&
   prev.clearSignals[prev.bot.name] === next.clearSignals[next.bot.name] &&
+  JSON.stringify(prev.bot.runtime) === JSON.stringify(next.bot.runtime) &&
   JSON.stringify(prev.bot.settings) === JSON.stringify(next.bot.settings)
 );
 
@@ -300,6 +427,55 @@ export default function BotManagerUI({ bots = [], refetchBots, backendOk = true 
     }
     setTogglingBot(null);
   }, [refetchBots]);
+
+  const restartBot = useCallback(async (botId) => {
+    setTogglingBot(botId);
+    try {
+      await apiClient.post(`/api/bots/${botId}/restart`);
+      refetchBots();
+      toast.success('Restarting — previous run aborted, fresh backfill queued');
+    } catch (err) {
+      toast.error(humanizeApiError(err, 'Failed to restart bot.'));
+    }
+    setTogglingBot(null);
+  }, [refetchBots]);
+
+  const [bulkBusy, setBulkBusy] = useState(null); // 'start' | 'stop'
+  const startAll = useCallback(async () => {
+    setBulkBusy('start');
+    try {
+      const res = await apiClient.post('/api/bots/bulk/start', null);
+      refetchBots();
+      const n = res.data?.started?.length || 0;
+      toast.success(n ? `${n} bot${n === 1 ? '' : 's'} started — they backfill in parallel` : 'All bots are already running');
+    } catch (err) {
+      toast.error(humanizeApiError(err, 'Failed to start bots.'));
+    }
+    setBulkBusy(null);
+  }, [refetchBots]);
+
+  const stopAll = useCallback(async () => {
+    const liveCount = bots.filter(b => b.is_active && b.settings?.api_execution).length;
+    const ok = await confirmDialog({
+      title: 'Stop all bots',
+      message: liveCount
+        ? `${liveCount} bot${liveCount === 1 ? ' is' : 's are'} routing live orders. Stopping leaves any open positions unmanaged (no SL/TP) until restarted. Continue?`
+        : 'Stop every running bot? Startups in progress are aborted.',
+      confirmText: 'Stop all',
+      type: liveCount ? 'danger' : 'warning',
+    });
+    if (!ok) return;
+    setBulkBusy('stop');
+    try {
+      const res = await apiClient.post('/api/bots/bulk/stop', null);
+      refetchBots();
+      const n = res.data?.stopped?.length || 0;
+      toast.success(n ? `${n} bot${n === 1 ? '' : 's'} stopped` : 'No running bots');
+    } catch (err) {
+      toast.error(humanizeApiError(err, 'Failed to stop bots.'));
+    }
+    setBulkBusy(null);
+  }, [bots, refetchBots]);
 
   const handleDeleteClick = useCallback(async (botId, botName) => {
     if (busyAction) return;
@@ -403,6 +579,10 @@ export default function BotManagerUI({ bots = [], refetchBots, backendOk = true 
     setOpenConsoles(prev => ({ ...prev, [botId]: !prev[botId] }));
   }, []);
 
+  const runningCount  = bots.filter(b => b.is_active).length;
+  const startingCount = bots.filter(b => b.is_active && ['starting', 'fetching', 'backtesting'].includes(b.runtime?.phase)).length;
+  const liveCount     = bots.filter(b => b.is_active && b.settings?.api_execution).length;
+
   return (
     <PageShell glowColor="green">
       <input
@@ -415,10 +595,23 @@ export default function BotManagerUI({ bots = [], refetchBots, backendOk = true 
 
       <SectionHeader
         title="Trading Algorithms"
-        subtitle="Manage, configure, and deploy automated strategies"
+        subtitle={runningCount
+          ? `${runningCount} of ${bots.length} running${startingCount ? ` · ${startingCount} starting up` : ''}${liveCount ? ` · ${liveCount} on live orders` : ''}`
+          : 'Manage, configure, and deploy automated strategies'}
         accentColor="white"
         action={
           <div className="flex items-center gap-2.5">
+            {bots.length > 1 && (
+              <div className="flex items-center rounded-md border border-border overflow-hidden">
+                <Button variant="ghost" size="md" icon={IconPlay} loading={bulkBusy === 'start'} disabled={!!bulkBusy || runningCount === bots.length} onClick={startAll} title="Start every stopped bot — they backfill in parallel, no waiting">
+                  Start all
+                </Button>
+                <div className="w-px h-5 bg-border" />
+                <Button variant="ghost" size="md" icon={IconStop} loading={bulkBusy === 'stop'} disabled={!!bulkBusy || runningCount === 0} onClick={stopAll} title="Stop every running bot">
+                  Stop all
+                </Button>
+              </div>
+            )}
             <Button
               variant="secondary"
               size="md"
@@ -487,6 +680,7 @@ export default function BotManagerUI({ bots = [], refetchBots, backendOk = true 
               openConsoles={openConsoles}
               clearSignals={clearSignals}
               toggleBotState={toggleBotState}
+              restartBot={restartBot}
               handleExport={handleExport}
               handleDuplicate={handleDuplicate}
               handleClearCacheClick={handleClearCacheClick}

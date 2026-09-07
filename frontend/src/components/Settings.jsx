@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { apiClient } from '../api/client';
 import { humanizeApiError } from '../api/errors';
 import PageShell from './ui/PageShell';
@@ -12,17 +12,16 @@ import { SkeletonCard } from './ui/Skeleton';
 import { toast } from './ui/Toast';
 import { confirmDialog } from './ui/ConfirmDialog';
 
-const EXCHANGES = [
-  { id: 'okx', name: 'OKX' },
-  { id: 'binance', name: 'Binance' },
-  { id: 'bitvavo', name: 'Bitvavo' },
-  { id: 'coinbase', name: 'Coinbase' },
-  { id: 'cryptocom', name: 'Crypto.com' },
-  { id: 'kraken', name: 'Kraken' },
-  { id: 'kucoin', name: 'KuCoin' },
+/* Static fallback until /api/keys/exchanges answers */
+const FALLBACK_EXCHANGES = [
+  { id: 'okx', name: 'OKX', needs_passphrase: true, has_sandbox: true },
+  { id: 'binance', name: 'Binance', needs_passphrase: false, has_sandbox: true },
+  { id: 'bitvavo', name: 'Bitvavo', needs_passphrase: false, has_sandbox: false },
+  { id: 'coinbase', name: 'Coinbase', needs_passphrase: false, has_sandbox: false },
+  { id: 'cryptocom', name: 'Crypto.com', needs_passphrase: false, has_sandbox: true },
+  { id: 'kraken', name: 'Kraken', needs_passphrase: false, has_sandbox: false },
+  { id: 'kucoin', name: 'KuCoin', needs_passphrase: true, has_sandbox: false },
 ];
-
-const EXCHANGE_NAMES = Object.fromEntries(EXCHANGES.map(ex => [ex.id, ex.name]));
 
 /* Deterministic avatar color per exchange (token values) */
 const AVATAR_COLORS = {
@@ -41,9 +40,28 @@ const IconKeyEmpty = (
     <circle cx="16" cy="8" r="1" fill="currentColor" stroke="none" />
   </svg>
 );
+const IconCheck = (
+  <svg className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} aria-hidden="true">
+    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+  </svg>
+);
+const IconBlock = (
+  <svg className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2} aria-hidden="true">
+    <circle cx="12" cy="12" r="8" /><path strokeLinecap="round" d="M6.5 6.5l11 11" />
+  </svg>
+);
 
-function ExchangeAvatar({ exchange }) {
-  const initial = (EXCHANGE_NAMES[exchange] || exchange || '?').charAt(0).toUpperCase();
+const usd = (v, digits = 2) => `$${(Number(v) || 0).toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits })}`;
+const qty = (v) => {
+  const n = Number(v) || 0;
+  if (n === 0) return '0';
+  if (n >= 1000) return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  if (n >= 1) return n.toLocaleString(undefined, { maximumFractionDigits: 4 });
+  return n.toLocaleString(undefined, { maximumFractionDigits: 8 });
+};
+
+function ExchangeAvatar({ exchange, name }) {
+  const initial = (name || exchange || '?').charAt(0).toUpperCase();
   return (
     <div
       className={`w-9 h-9 rounded-lg border flex items-center justify-center font-bold text-sm shrink-0 ${AVATAR_COLORS[exchange] || 'text-muted border-border bg-raised'}`}
@@ -54,12 +72,79 @@ function ExchangeAvatar({ exchange }) {
   );
 }
 
+/* Wallet contents with a single USD total, largest holdings first */
+function WalletPanel({ wallet }) {
+  const [showDust, setShowDust] = useState(false);
+  const rows = useMemo(() => {
+    const entries = Object.entries(wallet?.balances || {}).map(([coin, d]) => ({ coin, ...d }));
+    entries.sort((a, b) => (b.usd_value ?? -1) - (a.usd_value ?? -1) || b.total - a.total);
+    return entries;
+  }, [wallet]);
+  const dust = rows.filter(r => r.usd_value !== null && r.usd_value !== undefined && r.usd_value < 1);
+  const visible = showDust ? rows : rows.filter(r => !dust.includes(r));
+  const total = wallet?.total_usd || 0;
+
+  if (rows.length === 0) return <span className="text-xs text-muted">Wallet is empty.</span>;
+
+  return (
+    <div>
+      <div className="flex items-end justify-between mb-3 flex-wrap gap-2">
+        <div>
+          <p className="text-[9px] font-bold uppercase tracking-wider text-muted">Estimated value</p>
+          <p className="text-xl font-num font-bold text-text leading-none mt-1">{usd(total)}</p>
+        </div>
+        <div className="text-right">
+          <p className="text-[9px] text-faint font-num">{rows.length} asset{rows.length === 1 ? '' : 's'}{wallet.unpriced?.length ? ` · ${wallet.unpriced.length} unpriced` : ''}</p>
+          {dust.length > 0 && (
+            <button type="button" onClick={() => setShowDust(v => !v)} className="text-[9px] text-muted hover:text-text underline-offset-2 hover:underline">
+              {showDust ? 'hide' : 'show'} {dust.length} dust (&lt;$1)
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="overflow-x-auto rounded-md border border-border">
+        <table className="w-full text-left">
+          <thead className="bg-bg/60">
+            <tr className="text-[8px] font-bold uppercase tracking-wider text-muted">
+              <th className="px-3 py-2">Asset</th>
+              <th className="px-3 py-2 text-right">Available</th>
+              <th className="px-3 py-2 text-right">In orders</th>
+              <th className="px-3 py-2 text-right">Value</th>
+              <th className="px-3 py-2 w-24">Share</th>
+            </tr>
+          </thead>
+          <tbody className="text-[11px] font-num">
+            {visible.map(r => {
+              const share = total > 0 && r.usd_value ? Math.min(100, (r.usd_value / total) * 100) : 0;
+              return (
+                <tr key={r.coin} className="border-t border-border/50 hover:bg-text/[0.03]">
+                  <td className="px-3 py-2 font-bold text-text">{r.coin}</td>
+                  <td className="px-3 py-2 text-right text-text">{qty(r.free)}</td>
+                  <td className={`px-3 py-2 text-right ${r.used > 0 ? 'text-warn' : 'text-faint'}`}>{r.used > 0 ? qty(r.used) : '—'}</td>
+                  <td className="px-3 py-2 text-right text-text-secondary">{r.usd_value !== null && r.usd_value !== undefined ? usd(r.usd_value) : <span className="text-faint" title="No USD market found for this asset on the exchange">n/a</span>}</td>
+                  <td className="px-3 py-2">
+                    <div className="h-1 rounded-full bg-border overflow-hidden">
+                      <div className="h-full bg-success rounded-full" style={{ width: `${share}%` }} />
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 export default function Settings() {
   const [keys, setKeys] = useState([]);
+  const [exchanges, setExchanges] = useState(FALLBACK_EXCHANGES);
   const [initialLoading, setInitialLoading] = useState(true);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [deletingKey, setDeletingKey] = useState(null);
+  const [lastChecked, setLastChecked] = useState(null);
 
   const [balances, setBalances] = useState({});
   const [fetchingBalanceFor, setFetchingBalanceFor] = useState(null);
@@ -71,7 +156,10 @@ export default function Settings() {
   const [passphrase, setPassphrase] = useState('');
   const [isSandbox, setIsSandbox] = useState(true);
 
-  const needsPassphrase = ['okx', 'kucoin'].includes(selectedExchange);
+  const exchangeInfo = exchanges.find(e => e.id === selectedExchange) || FALLBACK_EXCHANGES[0];
+  const exchangeNames = useMemo(() => Object.fromEntries(exchanges.map(e => [e.id, e.name])), [exchanges]);
+  const needsPassphrase = !!exchangeInfo.needs_passphrase;
+  const hasSandbox = !!exchangeInfo.has_sandbox;
 
   const [swapModal, setSwapModal] = useState(null);
   const [swapFrom, setSwapFrom] = useState('USDC');
@@ -84,6 +172,7 @@ export default function Settings() {
     try {
       const response = await apiClient.get('/api/keys');
       setKeys(Array.isArray(response.data) ? response.data : []);
+      setLastChecked(new Date());
     } catch (err) {
       toast.error(humanizeApiError(err));
     }
@@ -92,24 +181,30 @@ export default function Settings() {
   }, []);
 
   useEffect(() => {
-    const controller = new AbortController();
     fetchKeys(); // eslint-disable-line react-hooks/set-state-in-effect -- initial data fetch on mount
-    return () => controller.abort();
+    apiClient.get('/api/keys/exchanges')
+      .then(res => { if (Array.isArray(res.data) && res.data.length) setExchanges(res.data); })
+      .catch(() => { /* keep fallback list */ });
   }, [fetchKeys]);
+
+  // Exchanges without a testnet can only be added as Live
+  useEffect(() => {
+    if (!hasSandbox) setIsSandbox(false); // eslint-disable-line react-hooks/set-state-in-effect -- derived from exchange capability
+  }, [hasSandbox]);
 
   const handleSave = async (e) => {
     e.preventDefault();
     setLoading(true);
     try {
       await apiClient.post('/api/keys', {
-        name: keyName,
+        name: keyName.trim(),
         exchange: selectedExchange,
-        api_key: apiKey,
-        api_secret: apiSecret,
+        api_key: apiKey.trim(),
+        api_secret: apiSecret.trim(),
         passphrase: needsPassphrase ? passphrase : '',
-        is_sandbox: isSandbox
+        is_sandbox: hasSandbox ? isSandbox : false,
       });
-      toast.success(`Key '${keyName}' verified and securely stored.`);
+      toast.success(`Key '${keyName.trim()}' verified and securely stored.`);
       setKeyName('');
       setApiKey('');
       setApiSecret('');
@@ -121,54 +216,60 @@ export default function Settings() {
     setLoading(false);
   };
 
-  const handleDeleteClick = async (delName) => {
+  const handleDeleteClick = async (k) => {
+    const running = (k.bots || []).filter(b => b.is_active);
     const ok = await confirmDialog({
       title: 'Delete Connection',
-      message: `Are you sure you want to permanently delete the key '${delName}'?`,
+      message: running.length
+        ? `'${k.name}' is used by ${running.length} running bot${running.length === 1 ? '' : 's'} (${running.map(b => b.name).join(', ')}). They will lose exchange access on their next candle. Delete anyway?`
+        : k.bots?.length
+          ? `'${k.name}' is linked to ${k.bots.length} bot${k.bots.length === 1 ? '' : 's'}. They fall back to forward-test mode until you assign another key. Delete?`
+          : `Permanently delete the key '${k.name}'?`,
       confirmText: 'Delete Key',
       type: 'danger',
     });
     if (!ok) return;
-    setDeletingKey(delName);
+    setDeletingKey(k.name);
     try {
-      await apiClient.delete(`/api/keys/${delName}`);
+      await apiClient.delete(`/api/keys/${encodeURIComponent(k.name)}`);
       setBalances(prev => {
-        const newBal = {...prev};
-        delete newBal[delName];
+        const newBal = { ...prev };
+        delete newBal[k.name];
         return newBal;
       });
       fetchKeys();
-      toast.success(`Key '${delName}' deleted`);
+      toast.success(`Key '${k.name}' deleted`);
     } catch (err) {
       toast.error(humanizeApiError(err));
     }
     setDeletingKey(null);
   };
 
+  const loadWallet = useCallback(async (kName) => {
+    const response = await apiClient.get(`/api/keys/${encodeURIComponent(kName)}/balance`);
+    return response.data;
+  }, []);
+
   const handleFetchBalance = async (kName) => {
     if (balances[kName]) {
       setBalances(prev => {
-        const newBal = {...prev};
+        const newBal = { ...prev };
         delete newBal[kName];
         return newBal;
       });
       return;
     }
-
     setFetchingBalanceFor(kName);
     try {
-      const response = await apiClient.get(`/api/keys/${kName}/balance`);
-      setBalances(prev => ({
-        ...prev,
-        [kName]: response.data.balances
-      }));
+      const data = await loadWallet(kName);
+      setBalances(prev => ({ ...prev, [kName]: data }));
     } catch (err) {
       toast.error(humanizeApiError(err, `Failed to fetch balance for ${kName}`));
     }
     setFetchingBalanceFor(null);
   };
 
-  // Keep open asset views current: silently refresh every 12s in the
+  // Keep open wallet views current: silently refresh every 12s in the
   // background (no spinner, keep last known values on a failed fetch)
   const openBalanceKeys = Object.keys(balances).sort().join(',');
   useEffect(() => {
@@ -177,62 +278,64 @@ export default function Settings() {
     const t = setInterval(() => {
       keyNames.forEach(async (kName) => {
         try {
-          const response = await apiClient.get(`/api/keys/${encodeURIComponent(kName)}/balance`);
-          setBalances(prev => (prev[kName] ? { ...prev, [kName]: response.data.balances } : prev));
+          const data = await loadWallet(kName);
+          setBalances(prev => (prev[kName] ? { ...prev, [kName]: data } : prev));
         } catch { /* keep last known values */ }
       });
     }, 12000);
     return () => clearInterval(t);
-  }, [openBalanceKeys]);
+  }, [openBalanceKeys, loadWallet]);
 
   const openSwapModal = async (kName) => {
-      setSwapModal(kName);
-      if (!balances[kName]) {
-          try {
-              const response = await apiClient.get(`/api/keys/${kName}/balance`);
-              setBalances(prev => ({ ...prev, [kName]: response.data.balances }));
-          } catch { /* silent */ }
-      }
+    setSwapModal(kName);
+    if (!balances[kName]) {
+      try {
+        const data = await loadWallet(kName);
+        setBalances(prev => ({ ...prev, [kName]: data }));
+      } catch { /* silent */ }
+    }
   };
 
+  const walletBalancesFor = (kName) => balances[kName]?.balances || null;
+
   const handleMaxClick = () => {
-      const walletBalances = balances[swapModal];
-      if (!walletBalances || !walletBalances[swapFrom]) {
-          toast.warn(`You don't have any ${swapFrom} in this wallet.`);
-          return;
-      }
-      setAmountType('from');
-      setSwapAmount(walletBalances[swapFrom].free);
+    const wb = walletBalancesFor(swapModal);
+    if (!wb || !wb[swapFrom]) {
+      toast.warn(`You don't have any ${swapFrom} in this wallet.`);
+      return;
+    }
+    setAmountType('from');
+    setSwapAmount(wb[swapFrom].free);
   };
 
   const executeSwap = async (e) => {
-      e.preventDefault();
-      setLoading(true);
-      const currentWallet = swapModal;
-      try {
-          await apiClient.post(`/api/keys/${currentWallet}/swap`, {
-              from_asset: swapFrom,
-              to_asset: swapTo,
-              amount: parseFloat(swapAmount),
-              amount_type: amountType
-          });
-
-          setSwapModal(null);
-          toast.success('Market order executed. Updating balance…');
-
-          setTimeout(async () => {
-              try {
-                  const response = await apiClient.get(`/api/keys/${currentWallet}/balance`);
-                  setBalances(prev => ({ ...prev, [currentWallet]: response.data.balances }));
-              } catch { /* silent */ }
-          }, 1500);
-
-      } catch (err) {
-          setSwapModal(null);
-          toast.error(humanizeApiError(err));
-      }
-      setLoading(false);
+    e.preventDefault();
+    setLoading(true);
+    const currentWallet = swapModal;
+    try {
+      await apiClient.post(`/api/keys/${encodeURIComponent(currentWallet)}/swap`, {
+        from_asset: swapFrom,
+        to_asset: swapTo,
+        amount: parseFloat(swapAmount),
+        amount_type: amountType,
+      });
+      setSwapModal(null);
+      toast.success('Market order executed. Updating balance…');
+      setTimeout(async () => {
+        try {
+          const data = await loadWallet(currentWallet);
+          setBalances(prev => ({ ...prev, [currentWallet]: data }));
+        } catch { /* silent */ }
+      }, 1500);
+    } catch (err) {
+      setSwapModal(null);
+      toast.error(humanizeApiError(err));
+    }
+    setLoading(false);
   };
+
+  const connectedCount = keys.filter(k => k.is_active).length;
+  const liveKeyCount = keys.filter(k => !k.is_sandbox).length;
 
   return (
     <PageShell glowColor="gold">
@@ -242,81 +345,65 @@ export default function Settings() {
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setSwapModal(null)} />
           <div className="relative modal-enter terminal-card max-w-md w-full shadow-pop">
             <div className="px-5 py-4 border-b border-border flex justify-between items-center">
-                <div>
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-text">Market Execution</h3>
-                    <p className="text-muted text-[10px] mt-0.5">Routing via: <span className="text-accent font-bold">{swapModal}</span></p>
-                </div>
-                <button
-                  onClick={() => setSwapModal(null)}
-                  title="Close"
-                  aria-label="Close"
-                  className="text-muted hover:text-danger transition-colors font-bold"
-                >
-                  &#10005;
-                </button>
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-text">Market Execution</h3>
+                <p className="text-muted text-[10px] mt-0.5">Routing via: <span className="text-accent font-bold">{swapModal}</span></p>
+              </div>
+              <button
+                onClick={() => setSwapModal(null)}
+                title="Close"
+                aria-label="Close"
+                className="text-muted hover:text-danger transition-colors font-bold"
+              >
+                &#10005;
+              </button>
             </div>
 
             <form onSubmit={executeSwap} className="p-5 space-y-5">
-                <div className="grid grid-cols-2 gap-4">
-                    <Input
-                      label="From Asset (Sell)"
-                      mono
-                      required
-                      value={swapFrom}
-                      onChange={e => setSwapFrom(e.target.value.toUpperCase())}
-                      placeholder="USDC"
-                    />
-                    <Input
-                      label="To Asset (Buy)"
-                      mono
-                      required
-                      value={swapTo}
-                      onChange={e => setSwapTo(e.target.value.toUpperCase())}
-                      placeholder="SOL"
-                    />
-                </div>
+              <div className="grid grid-cols-2 gap-4">
+                <Input label="From Asset (Sell)" mono required value={swapFrom} onChange={e => setSwapFrom(e.target.value.toUpperCase())} placeholder="USDC" />
+                <Input label="To Asset (Buy)" mono required value={swapTo} onChange={e => setSwapTo(e.target.value.toUpperCase())} placeholder="SOL" />
+              </div>
 
-                <div>
-                    <div className="flex justify-between items-end mb-1.5">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-muted">Trade Size</span>
-                        {balances[swapModal] && balances[swapModal][swapFrom] && (
-                            <span className="text-[9px] text-muted font-num">Avail: {balances[swapModal][swapFrom].free.toFixed(4)} {swapFrom}</span>
-                        )}
-                    </div>
-                    <div className="flex bg-inset border border-border rounded-md overflow-hidden focus-within:border-accent/70 transition-colors duration-200">
-                        <select
-                          value={amountType}
-                          onChange={e => setAmountType(e.target.value)}
-                          className="bg-raised text-muted text-[10px] uppercase font-bold px-2.5 py-2 border-r border-border outline-none cursor-pointer hover:text-text"
-                        >
-                            <option value="from">Spend ({swapFrom})</option>
-                            <option value="to">Receive ({swapTo})</option>
-                        </select>
-                        <input
-                          type="number"
-                          step="any"
-                          required
-                          value={swapAmount}
-                          onChange={e => setSwapAmount(e.target.value)}
-                          className="w-full bg-transparent text-text font-num px-3 py-2 text-xs focus:outline-none placeholder-faint"
-                          placeholder="0.00"
-                        />
-                        <button
-                          type="button"
-                          onClick={handleMaxClick}
-                          title="Use full available balance"
-                          className="bg-overlay hover:bg-border text-text text-[9px] font-bold uppercase px-3 transition-colors border-l border-border"
-                        >
-                          MAX
-                        </button>
-                    </div>
+              <div>
+                <div className="flex justify-between items-end mb-1.5">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-muted">Trade Size</span>
+                  {walletBalancesFor(swapModal)?.[swapFrom] && (
+                    <span className="text-[9px] text-muted font-num">Avail: {qty(walletBalancesFor(swapModal)[swapFrom].free)} {swapFrom}</span>
+                  )}
                 </div>
+                <div className="flex bg-inset border border-border rounded-md overflow-hidden focus-within:border-accent/70 transition-colors duration-200">
+                  <select
+                    value={amountType}
+                    onChange={e => setAmountType(e.target.value)}
+                    className="bg-raised text-muted text-[10px] uppercase font-bold px-2.5 py-2 border-r border-border outline-none cursor-pointer hover:text-text"
+                  >
+                    <option value="from">Spend ({swapFrom})</option>
+                    <option value="to">Receive ({swapTo})</option>
+                  </select>
+                  <input
+                    type="number"
+                    step="any"
+                    required
+                    value={swapAmount}
+                    onChange={e => setSwapAmount(e.target.value)}
+                    className="w-full bg-transparent text-text font-num px-3 py-2 text-xs focus:outline-none placeholder-faint"
+                    placeholder="0.00"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleMaxClick}
+                    title="Use full available balance"
+                    className="bg-overlay hover:bg-border text-text text-[9px] font-bold uppercase px-3 transition-colors border-l border-border"
+                  >
+                    MAX
+                  </button>
+                </div>
+              </div>
 
-                <div className="pt-4 border-t border-border">
-                    <Button type="submit" fullWidth loading={loading}>
-                        Execute Order
-                    </Button>
-                </div>
+              <div className="pt-4 border-t border-border">
+                <Button type="submit" fullWidth loading={loading}>Execute Order</Button>
+              </div>
             </form>
           </div>
         </div>
@@ -326,11 +413,13 @@ export default function Settings() {
       <GlowPanel glowColor="gold">
         <SectionHeader
           title="Exchange Connections"
-          subtitle="Encrypted API keys stored locally"
+          subtitle={keys.length
+            ? `${connectedCount}/${keys.length} connected · ${liveKeyCount} live · ${keys.length - liveKeyCount} sandbox${lastChecked ? ` · checked ${lastChecked.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}`
+            : 'Encrypted API keys stored locally'}
           accentColor="white"
           action={
-            <Button variant="secondary" size="sm" loading={refreshing} onClick={fetchKeys}>
-              Refresh Status
+            <Button variant="secondary" size="sm" loading={refreshing} onClick={fetchKeys} title="Re-verify every key against its exchange">
+              Test connections
             </Button>
           }
         />
@@ -346,90 +435,89 @@ export default function Settings() {
             <EmptyState
               icon={IconKeyEmpty}
               title="No exchange keys configured"
-              description="Add an API key below to enable live trading, balance checks, and market execution."
+              description="Add an API key below to enable live and paper trading, balance checks, and market execution. Bots without a key run in forward-test mode."
             />
           </div>
         ) : (
           <div className="space-y-3">
-            {keys.map((k, index) => (
-              <div key={index} className={`flex flex-col bg-inset/50 p-4 border border-border rounded-lg transition-all duration-200 hover:border-border-strong fade-in-delay-${Math.min(index + 1, 6)}`}>
-                <div className="flex items-center justify-between gap-3 flex-wrap">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <ExchangeAvatar exchange={k.exchange} />
-                    <div className="flex flex-col min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-text font-bold text-sm truncate">{k.name}</span>
-                        {k.is_active
-                          ? <Badge variant="success" dot>Connected</Badge>
-                          : <Badge variant="danger" dot pulse>
-                              <span title={k.error_msg} className="cursor-help">Error</span>
-                            </Badge>}
-                        <Badge variant={k.is_sandbox ? 'info' : 'accent'}>
-                          {k.is_sandbox ? 'Sandbox' : 'Live'}
-                        </Badge>
+            {keys.map((k, index) => {
+              const linked = k.bots || [];
+              const runningLinked = linked.filter(b => b.is_active);
+              return (
+                <div key={k.name} className={`flex flex-col bg-inset/50 p-4 border rounded-lg transition-all duration-200 hover:border-border-strong fade-in-delay-${Math.min(index + 1, 6)} ${k.is_active ? 'border-border' : 'border-danger/30'}`}>
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <ExchangeAvatar exchange={k.exchange} name={exchangeNames[k.exchange]} />
+                      <div className="flex flex-col min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-text font-bold text-sm truncate">{k.name}</span>
+                          {k.is_active
+                            ? <Badge variant="success" dot>Connected</Badge>
+                            : <Badge variant="danger" dot pulse>Error</Badge>}
+                          <Badge variant={k.is_sandbox ? 'info' : 'accent'}>{k.is_sandbox ? 'Sandbox' : 'Live'}</Badge>
+                        </div>
+                        <div className="flex items-center gap-2 flex-wrap mt-1 text-[10px] text-muted">
+                          <span className="uppercase font-bold tracking-wider">{exchangeNames[k.exchange] || k.exchange}</span>
+                          {k.latency_ms !== null && k.latency_ms !== undefined && (
+                            <span className="font-num text-faint" title="Round-trip time of the last balance check">{k.latency_ms} ms</span>
+                          )}
+                          {k.created_at && (
+                            <span className="font-num text-faint">added {new Date(k.created_at).toLocaleDateString()}</span>
+                          )}
+                        </div>
                       </div>
-                      <span className="text-[10px] text-muted uppercase font-bold tracking-wider mt-1">
-                        {EXCHANGE_NAMES[k.exchange] || k.exchange}
-                        <span className="text-faint normal-case font-num tracking-normal ml-2">••••••••••••••••</span>
-                      </span>
+                    </div>
+
+                    <div className="flex gap-2 items-center shrink-0">
+                      {k.is_active && (
+                        <>
+                          <Button variant="secondary" size="sm" title="Execute a market swap through this key" onClick={() => openSwapModal(k.name)}>
+                            Trade
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            loading={fetchingBalanceFor === k.name}
+                            title={balances[k.name] ? 'Hide wallet' : 'Show wallet (auto-refreshes every 12s)'}
+                            onClick={() => handleFetchBalance(k.name)}
+                          >
+                            {balances[k.name] ? 'Hide Wallet' : 'Wallet'}
+                          </Button>
+                        </>
+                      )}
+                      <Button variant="danger" size="sm" loading={deletingKey === k.name} title="Delete this connection" onClick={() => handleDeleteClick(k)}>
+                        Delete
+                      </Button>
                     </div>
                   </div>
 
-                  <div className="flex gap-2 items-center shrink-0">
-                    {k.is_active && (
-                      <>
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          title="Execute a market swap through this key"
-                          onClick={() => openSwapModal(k.name)}
-                        >
-                          Trade
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          loading={fetchingBalanceFor === k.name}
-                          title={balances[k.name] ? 'Hide wallet balances' : 'Fetch wallet balances'}
-                          onClick={() => handleFetchBalance(k.name)}
-                        >
-                          {balances[k.name] ? 'Hide Assets' : 'Assets'}
-                        </Button>
-                      </>
-                    )}
-                    <Button
-                      variant="danger"
-                      size="sm"
-                      loading={deletingKey === k.name}
-                      title="Delete this connection"
-                      onClick={() => handleDeleteClick(k.name)}
-                    >
-                      Delete
-                    </Button>
-                  </div>
-                </div>
+                  {!k.is_active && k.error_msg && (
+                    <p className="mt-3 text-[10px] text-danger bg-danger/[0.06] border border-danger/20 rounded-md px-3 py-2">{k.error_msg}</p>
+                  )}
 
-                {balances[k.name] && (
-                  <div className="mt-4 pt-4 border-t border-border/50 fade-in">
-                    {Object.keys(balances[k.name]).length === 0 ? (
-                      <span className="text-xs text-muted">Wallet is empty.</span>
-                    ) : (
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                        {Object.entries(balances[k.name]).map(([coin, data]) => (
-                          <div key={coin} className="terminal-card p-3 border-l-2 border-success">
-                            <span className="text-[10px] text-muted font-bold uppercase font-num">{coin}</span>
-                            <span className="text-xs text-text font-num mt-1 block">{data.free.toFixed(4)}</span>
-                            {data.used > 0 && (
-                              <span className="text-[9px] text-warn mt-1 font-num block">In Orders: {data.used.toFixed(4)}</span>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                  {/* Which bots depend on this key */}
+                  <div className="mt-3 flex items-center gap-2 flex-wrap">
+                    <span className="text-[8px] font-bold uppercase tracking-wider text-faint">Used by</span>
+                    {linked.length === 0 ? (
+                      <span className="text-[10px] text-muted">no bots yet — assign it in the builder's bot config node</span>
+                    ) : linked.map(b => (
+                      <span key={b.name} className="inline-flex items-center gap-1.5 text-[9px] font-bold text-text-secondary bg-bg/60 border border-border rounded-sm px-1.5 py-0.5" title={b.is_active ? 'running' : 'stopped'}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${b.is_active ? 'bg-success animate-pulse' : 'bg-faint/40'}`} />
+                        {b.name}
+                        {b.live && <span className="text-accent">live</span>}
+                      </span>
+                    ))}
+                    {runningLinked.length > 0 && <span className="text-[9px] text-success font-num">{runningLinked.length} running</span>}
                   </div>
-                )}
-              </div>
-            ))}
+
+                  {balances[k.name] && (
+                    <div className="mt-4 pt-4 border-t border-border/50 fade-in">
+                      <WalletPanel wallet={balances[k.name]} />
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
         </div>
@@ -438,73 +526,111 @@ export default function Settings() {
       {/* Configure API Key */}
       <GlowPanel>
         <SectionHeader
-          title="Configure API Key"
-          subtitle="Credentials are encrypted at rest with Fernet"
+          title="Add Connection"
+          subtitle="Credentials are verified against the exchange, then encrypted at rest (Fernet)"
           accentColor="white"
         />
-        <form onSubmit={handleSave} className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-5">
-          <Select label="Exchange" value={selectedExchange} onChange={e => setSelectedExchange(e.target.value)}>
-            {EXCHANGES.map(ex => (
-              <option key={ex.id} value={ex.id}>{ex.name}</option>
-            ))}
-          </Select>
-          <Input
-            label="Connection Name"
-            required
-            value={keyName}
-            onChange={e => setKeyName(e.target.value)}
-            placeholder="e.g. Production Wallet"
-          />
-          <Input
-            label="API Key"
-            type="password"
-            mono
-            required
-            value={apiKey}
-            onChange={e => setApiKey(e.target.value)}
-            placeholder="••••••••••••••••"
-          />
-          <Input
-            label="Secret Key"
-            type="password"
-            mono
-            required
-            value={apiSecret}
-            onChange={e => setApiSecret(e.target.value)}
-            placeholder="••••••••••••••••"
-          />
-          {needsPassphrase && (
-            <div className="col-span-1 md:col-span-2">
-              <Input
-                label="Passphrase"
-                type="password"
-                mono
-                required
-                value={passphrase}
-                onChange={e => setPassphrase(e.target.value)}
-                placeholder="API Passphrase"
-                hint="Required for OKX and KuCoin keys."
-              />
-            </div>
-          )}
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_300px] gap-6 mt-5">
+          <form onSubmit={handleSave} className="grid grid-cols-1 md:grid-cols-2 gap-4 content-start">
+            <Select label="Exchange" value={selectedExchange} onChange={e => setSelectedExchange(e.target.value)}>
+              {exchanges.map(ex => (
+                <option key={ex.id} value={ex.id}>{ex.name}</option>
+              ))}
+            </Select>
+            <Input
+              label="Connection Name"
+              required
+              value={keyName}
+              onChange={e => setKeyName(e.target.value)}
+              placeholder="e.g. Binance main"
+              hint="How bots refer to this key in the builder."
+            />
+            <Input
+              label="API Key"
+              type="password"
+              mono
+              required
+              value={apiKey}
+              onChange={e => setApiKey(e.target.value)}
+              placeholder="••••••••••••••••"
+              autoComplete="off"
+            />
+            <Input
+              label="Secret Key"
+              type="password"
+              mono
+              required
+              value={apiSecret}
+              onChange={e => setApiSecret(e.target.value)}
+              placeholder="••••••••••••••••"
+              autoComplete="off"
+            />
+            {needsPassphrase && (
+              <div className="col-span-1 md:col-span-2">
+                <Input
+                  label="Passphrase"
+                  type="password"
+                  mono
+                  required
+                  value={passphrase}
+                  onChange={e => setPassphrase(e.target.value)}
+                  placeholder="API Passphrase"
+                  hint={`${exchangeInfo.name} keys carry a passphrase you chose when creating the key.`}
+                  autoComplete="off"
+                />
+              </div>
+            )}
 
-          <div className="col-span-1 md:col-span-2 flex items-center justify-between pt-4 border-t border-border mt-2">
-            <label className="flex items-center cursor-pointer group">
+            <div className="col-span-1 md:col-span-2 flex items-center justify-between gap-4 pt-4 border-t border-border mt-2 flex-wrap">
+              <label className={`flex items-center group ${hasSandbox ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`} title={hasSandbox ? 'Route through the exchange testnet/demo environment' : `${exchangeInfo.name} has no testnet — this key runs against your real account`}>
                 <input
                   type="checkbox"
-                  checked={isSandbox}
+                  checked={hasSandbox && isSandbox}
+                  disabled={!hasSandbox}
                   onChange={e => setIsSandbox(e.target.checked)}
-                  className="w-3.5 h-3.5 accent-accent bg-inset border-border rounded-sm cursor-pointer"
+                  className="w-3.5 h-3.5 accent-accent bg-inset border-border rounded-sm cursor-pointer disabled:cursor-not-allowed"
                 />
                 <span className="ml-2 text-xs text-muted group-hover:text-text transition-colors font-bold uppercase tracking-wider">
-                  Sandbox Environment (Testnet)
+                  Sandbox / Testnet
                 </span>
-            </label>
-            <Button type="submit" loading={loading}>
-              {loading ? 'Verifying…' : 'Save Connection'}
-            </Button>
-          </div>
-        </form>
+                {!hasSandbox && <span className="ml-2 text-[9px] text-warn font-bold uppercase">not available on {exchangeInfo.name}</span>}
+              </label>
+              <Button type="submit" loading={loading}>
+                {loading ? 'Verifying…' : `Verify & Save${hasSandbox && isSandbox ? '' : ' (live)'}`}
+              </Button>
+            </div>
+          </form>
+
+          {/* Per-exchange setup guide + safety checklist */}
+          <aside className="bg-inset/50 border border-border rounded-lg p-4 space-y-4 self-start">
+            <div>
+              <p className="text-[9px] font-bold uppercase tracking-wider text-muted">Setting up {exchangeInfo.name}</p>
+              {exchangeInfo.keys_url ? (
+                <a href={exchangeInfo.keys_url} target="_blank" rel="noreferrer noopener" className="text-[11px] text-info hover:underline break-all mt-1 block">
+                  Create an API key on {exchangeInfo.name} ↗
+                </a>
+              ) : (
+                <p className="text-[11px] text-muted mt-1">Create an API key in your {exchangeInfo.name} account settings.</p>
+              )}
+              <ul className="mt-2 space-y-1 text-[10px] text-text-secondary">
+                <li className="flex items-center gap-1.5"><span className="text-success">{IconCheck}</span>Enable <b>read</b> + <b>spot trade</b> permissions</li>
+                <li className="flex items-center gap-1.5"><span className="text-danger">{IconBlock}</span>Leave <b>withdrawal</b> disabled — the bot never needs it</li>
+                <li className="flex items-center gap-1.5"><span className="text-success">{IconCheck}</span>Restrict the key to this machine's IP if the exchange allows it</li>
+                {needsPassphrase && <li className="flex items-center gap-1.5"><span className="text-success">{IconCheck}</span>Note the passphrase you set — it is required here</li>}
+                {exchangeInfo.sandbox_note && <li className="flex items-start gap-1.5"><span className="text-info mt-0.5">{IconCheck}</span><span>{exchangeInfo.sandbox_note}</span></li>}
+                {!hasSandbox && <li className="flex items-start gap-1.5"><span className="text-warn mt-0.5">{IconBlock}</span><span>No testnet: use paper mode in the bot (simulated fills on real prices) before enabling live orders.</span></li>}
+              </ul>
+            </div>
+            <div className="border-t border-border pt-3">
+              <p className="text-[9px] font-bold uppercase tracking-wider text-muted">Going live safely</p>
+              <ul className="mt-2 space-y-1 text-[10px] text-text-secondary list-disc list-inside">
+                <li>Set <b>max order value</b> in the bot config — required for live orders.</li>
+                <li>Start with a small balance; bots size trades from the free balance capped by their capital.</li>
+                <li>Keys are stored encrypted and never leave this server except to the exchange.</li>
+              </ul>
+            </div>
+          </aside>
+        </div>
       </GlowPanel>
     </PageShell>
   );
