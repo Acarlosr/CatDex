@@ -46,6 +46,8 @@ const StatTile = ({ label, value, sub, accent, icon, onClick, delay }) => (
 
 export default function Home({ setActiveView, bots = [], backendOk = true, refetchBots }) {
   const activeBots = bots.filter((b) => b.is_active);
+  const startingBots = activeBots.filter((b) => ['starting', 'fetching', 'backtesting'].includes(b.runtime?.phase)).length;
+  const haltedBots = bots.filter((b) => !b.is_active && b.settings?.last_stop_reason).length;
   const liveBots = bots.filter((b) => b.settings?.api_execution);
   const runningLive = bots.filter((b) => b.is_active && b.settings?.api_execution).length;
   const runningPaper = bots.filter((b) => b.is_active && !b.settings?.api_execution).length;
@@ -112,7 +114,11 @@ export default function Home({ setActiveView, bots = [], backendOk = true, refet
             delay={2}
             label="Running now"
             value={activeBots.length}
-            sub={activeBots.length ? 'evaluating on candle close' : 'all engines idle'}
+            sub={startingBots
+              ? `${startingBots} starting up · ${activeBots.length - startingBots} monitoring`
+              : haltedBots
+                ? `${haltedBots} stopped by engine — see bots`
+                : activeBots.length ? 'evaluating on candle close' : 'all engines idle'}
             accent="var(--color-success)"
             onClick={() => setActiveView('bots')}
             icon={<svg className="w-4.5 h-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>}

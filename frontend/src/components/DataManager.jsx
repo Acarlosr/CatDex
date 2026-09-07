@@ -125,9 +125,11 @@ export default function DataManager({ openChart }) {
   [liveKeys]);
 
   useEffect(() => {
-    const controller = new AbortController();
     fetchSummary(); // eslint-disable-line react-hooks/set-state-in-effect -- initial data fetch on mount
-    return () => controller.abort();
+    // Background backfills (running bots) fill the vault while this view is
+    // open — refresh silently so new datasets appear without a remount
+    const t = setInterval(fetchSummary, 20000);
+    return () => clearInterval(t);
   }, [fetchSummary]);
 
   // Fetch supported timeframes when exchange changes

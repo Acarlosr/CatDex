@@ -158,9 +158,9 @@ function ChartEngine({ dataset, openDataVault }) {
          validBots.forEach(bot => { 
              if (!newConfigs[bot.name]) { 
                  newConfigs[bot.name] = {  
-                     showSignals: false,  
-                     showBacktestTrades: true,  
-                     showRealTrades: true,  
+                     showSignals: false,
+                     showBacktestTrades: false,
+                     showRealTrades: false,
                      showBacktestPositions: false,  
                      showRealPositions: false,  
                      indicators: {},  

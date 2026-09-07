@@ -91,7 +91,16 @@ def get_bots_summary(db: Session = Depends(get_db)):
                 "api_key_name": b.settings.get("api_key_name") if b.settings else None,
                 "backtest_on_start": b.settings.get("backtest_on_start", False) if b.settings else False,
                 "backtest_capital": b.settings.get("backtest_capital", 1000) if b.settings else 1000,
-            }
+                # Needed by chart-open and the Data Vault live-guard: the
+                # same pair on another exchange is a different dataset
+                "data_exchange": b.settings.get("data_exchange", "okx") if b.settings else "okx",
+                "last_backtest_max_drawdown": b.settings.get("last_backtest_max_drawdown") if b.settings else None,
+                "last_backtest_summary": b.settings.get("last_backtest_summary") if b.settings else None,
+                "last_stop_reason": b.settings.get("last_stop_reason") if b.settings else None,
+                "max_drawdown": b.settings.get("max_drawdown") if b.settings else None,
+            },
+            # In-memory engine phase (starting / fetching / backtesting / live / halted)
+            "runtime": bot_manager.get_runtime(b.name),
         }
         for b in bots
     ]
@@ -133,8 +142,15 @@ def get_bot_signals(symbol: str, timeframe: str, limit: int = Query(default=5000
         for sid, cid, sym, ts, bn, nm, act, val, ed in rows
     ]
 
+def _sanitize_bot_name(name: str) -> str:
+    """Bot names appear in URLs and filenames; strip path-breaking characters."""
+    cleaned = "".join("-" if ch in "/\\%#?" else ch for ch in name)
+    return " ".join(cleaned.split()).strip()[:100]
+
+
 @router.post("/")
 def create_bot(bot_in: BotCreate, db: Session = Depends(get_db)):
+    bot_in.name = _sanitize_bot_name(bot_in.name) or "Unnamed Bot"
     existing_bot = db.query(BotConfig).filter(BotConfig.name == bot_in.name).first()
     if existing_bot:
         raise HTTPException(status_code=400, detail="A bot with this name already exists.")
@@ -173,7 +189,7 @@ def import_bot(payload: dict = Body(...), db: Session = Depends(get_db)):
     name = bot_data.get("name") or "Imported Bot"
     if not isinstance(name, str):
         raise HTTPException(status_code=400, detail="Invalid file: bot name must be a string.")
-    name = name.strip()[:100] or "Imported Bot"
+    name = _sanitize_bot_name(name) or "Imported Bot"
     if db.query(BotConfig).filter(BotConfig.name == name).first():
         base = f"{name} (imported)"
         name = base
@@ -220,12 +236,13 @@ def update_bot(bot_id: int, background_tasks: BackgroundTasks, bot_data: dict = 
         raise HTTPException(status_code=409, detail="Cannot update a running bot. Stop it first, then save your changes.")
 
     if "name" in bot_data and bot_data["name"] != bot.name:
-        new_name = bot_data["name"]
+        new_name = _sanitize_bot_name(bot_data["name"]) or bot.name
         existing = db.query(BotConfig).filter(BotConfig.name == new_name, BotConfig.id != bot_id).first()
         if existing:
             raise HTTPException(status_code=400, detail="A bot with this name already exists.")
         old_name = bot.name
         bot.name = new_name
+        bot_manager.rename_runtime(old_name, new_name)
         db.query(Signal).filter(Signal.bot_name == old_name).update({"bot_name": new_name}, synchronize_session=False)
         db.query(Order).filter(Order.bot_name == old_name).update({"bot_name": new_name}, synchronize_session=False)
         db.query(Position).filter(Position.bot_name == old_name).update({"bot_name": new_name}, synchronize_session=False)
@@ -323,26 +340,75 @@ def delete_bot(bot_id: int, background_tasks: BackgroundTasks, db: Session = Dep
     background_tasks.add_task(_cleanup_bot_data, bot_name)
     return {"message": f"Bot '{bot_name}' deleted.", "is_active": False}
 
+async def _start(bot: BotConfig, db: Session):
+    bot.is_active = True
+    if bot.settings and bot.settings.get("last_stop_reason"):
+        bot.settings = {**bot.settings, "last_stop_reason": None}
+        flag_modified(bot, "settings")
+    db.commit()
+    # Show "queued" immediately — the engine thread replaces this within ms
+    bot_manager.set_runtime(bot.name, "starting", "Queued for startup…")
+    await event_bus.publish("BOT_STATE_CHANGED", {"bot_id": bot.id, "action": "started"})
+
+
+async def _stop(bot: BotConfig, db: Session):
+    bot.is_active = False
+    db.commit()
+    bot_manager.clear_runtime(bot.name)
+    await event_bus.publish("BOT_STATE_CHANGED", {"bot_id": bot.id, "action": "stopped"})
+
+
+@router.post("/bulk/start")
+async def start_all_bots(ids: Optional[List[int]] = Body(default=None), db: Session = Depends(get_db)):
+    """Start every stopped bot (or the given ids). The engine backfills them
+    concurrently; each bot reports its own phase in /summary."""
+    q = db.query(BotConfig).filter(BotConfig.is_active == False)
+    if ids:
+        q = q.filter(BotConfig.id.in_(ids))
+    started = []
+    for bot in q.all():
+        await _start(bot, db)
+        started.append(bot.name)
+    return {"started": started}
+
+
+@router.post("/bulk/stop")
+async def stop_all_bots(ids: Optional[List[int]] = Body(default=None), db: Session = Depends(get_db)):
+    q = db.query(BotConfig).filter(BotConfig.is_active == True)
+    if ids:
+        q = q.filter(BotConfig.id.in_(ids))
+    stopped = []
+    for bot in q.all():
+        await _stop(bot, db)
+        stopped.append(bot.name)
+    return {"stopped": stopped}
+
+
 @router.post("/{bot_id}/start")
 async def start_bot(bot_id: int, db: Session = Depends(get_db)):
     bot = db.query(BotConfig).filter(BotConfig.id == bot_id).first()
     if not bot: raise HTTPException(status_code=404, detail="Bot not found.")
     if bot.is_active: raise HTTPException(status_code=400, detail="Already active.")
-
-    bot.is_active = True
-    db.commit()
-    await event_bus.publish("BOT_STATE_CHANGED", {"bot_id": bot.id, "action": "started"})
+    await _start(bot, db)
     return {"message": f"Bot '{bot.name}' started.", "is_active": True}
 
 @router.post("/{bot_id}/stop")
 async def stop_bot(bot_id: int, db: Session = Depends(get_db)):
     bot = db.query(BotConfig).filter(BotConfig.id == bot_id).first()
     if not bot: raise HTTPException(status_code=404, detail="Bot not found.")
-
-    bot.is_active = False
-    db.commit()
-    await event_bus.publish("BOT_STATE_CHANGED", {"bot_id": bot.id, "action": "stopped"})
+    await _stop(bot, db)
     return {"message": f"Bot '{bot.name}' stopped.", "is_active": False}
+
+@router.post("/{bot_id}/restart")
+async def restart_bot(bot_id: int, db: Session = Depends(get_db)):
+    """Stop + start in one call. A fresh run token makes the previous startup
+    thread (if still backfilling) abort instead of running twice."""
+    bot = db.query(BotConfig).filter(BotConfig.id == bot_id).first()
+    if not bot: raise HTTPException(status_code=404, detail="Bot not found.")
+    if bot.is_active:
+        await _stop(bot, db)
+    await _start(bot, db)
+    return {"message": f"Bot '{bot.name}' restarted.", "is_active": True}
 
 @router.post("/{bot_id}/duplicate")
 def duplicate_bot(bot_id: int, db: Session = Depends(get_db)):
@@ -397,6 +463,18 @@ def export_bot(bot_id: int, db: Session = Depends(get_db)):
         media_type="application/json",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
+
+@router.get("/console/logs")
+def get_bot_logs_q(bot_name: str = Query(...), since: int = Query(default=0)):
+    """Query-param variant: bot names may contain '/', which breaks path routing."""
+    entries = blb.get_logs(bot_name, since_id=since)
+    return {"bot_name": bot_name, "entries": entries}
+
+
+@router.delete("/console/cache")
+def clear_bot_cache_q(bot_name: str = Query(...), db: Session = Depends(get_db)):
+    return clear_bot_cache(bot_name, db)
+
 
 @router.get("/{bot_name}/logs")
 def get_bot_logs(bot_name: str, since: int = Query(default=0)):
