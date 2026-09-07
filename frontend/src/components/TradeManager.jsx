@@ -120,6 +120,110 @@ const PaginationBar = ({ total, current, onPrev, onNext }) => total <= 1 ? null 
     </div>
 );
 
+// ─── Analysis window (date range) ────────────────────────────────────────────
+
+const DAY = 86400000;
+const toDateInput = (ms) => new Date(ms).toISOString().slice(0, 10);
+const fmtShortDate = (ms) => new Date(ms).toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
+const startOfUtcDay = (ms) => Math.floor(ms / DAY) * DAY;
+const endOfUtcDay = (ms) => startOfUtcDay(ms) + DAY - 1;
+
+const RANGE_PRESETS = [
+    { key: 'all', label: 'All' },
+    { key: 'ytd', label: 'YTD' },
+    { key: '1y', label: '1Y' },
+    { key: '6m', label: '6M' },
+    { key: '3m', label: '3M' },
+    { key: '1m', label: '1M' },
+];
+
+const presetStart = (key, max) => {
+    const d = new Date(max);
+    switch (key) {
+        case 'ytd': return Date.UTC(d.getUTCFullYear(), 0, 1);
+        case '1y': d.setUTCFullYear(d.getUTCFullYear() - 1); return startOfUtcDay(d.getTime());
+        case '6m': d.setUTCMonth(d.getUTCMonth() - 6); return startOfUtcDay(d.getTime());
+        case '3m': d.setUTCMonth(d.getUTCMonth() - 3); return startOfUtcDay(d.getTime());
+        case '1m': d.setUTCMonth(d.getUTCMonth() - 1); return startOfUtcDay(d.getTime());
+        default: return null;
+    }
+};
+
+const rangeThumb = 'appearance-none bg-transparent pointer-events-none absolute inset-x-0 top-0 h-4 m-0 ' +
+    '[&::-webkit-slider-runnable-track]:bg-transparent [&::-moz-range-track]:bg-transparent ' +
+    '[&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-bg [&::-webkit-slider-thumb]:shadow [&::-webkit-slider-thumb]:cursor-grab ' +
+    '[&::-moz-range-thumb]:pointer-events-auto [&::-moz-range-thumb]:w-3.5 [&::-moz-range-thumb]:h-3.5 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-accent [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-bg [&::-moz-range-thumb]:cursor-grab';
+
+/**
+ * Dual-thumb slider + date inputs + presets. `from`/`to` are ms or null (unbounded).
+ * The slider snaps to whole UTC days across the span of all closed trades.
+ */
+const DateRangeControl = ({ bounds, from, to, onChange }) => {
+    if (!bounds) return null;
+    const minDay = startOfUtcDay(bounds.min);
+    const maxDay = startOfUtcDay(bounds.max);
+    const totalDays = Math.max(1, Math.round((maxDay - minDay) / DAY));
+    const effFrom = from === null ? minDay : Math.min(Math.max(startOfUtcDay(from), minDay), maxDay);
+    const effTo = to === null ? maxDay : Math.min(Math.max(startOfUtcDay(to), minDay), maxDay);
+    const fromIdx = Math.round((effFrom - minDay) / DAY);
+    const toIdx = Math.round((effTo - minDay) / DAY);
+    const pct = (i) => (i / totalDays) * 100;
+    const isAll = from === null && to === null;
+    const activePreset = isAll ? 'all'
+        : RANGE_PRESETS.find(p => p.key !== 'all' && presetStart(p.key, bounds.max) === from && to === null)?.key || null;
+
+    const commit = (nextFrom, nextTo) => {
+        // Snap back to "unbounded" when a thumb sits at the edge, so new trades keep flowing in.
+        onChange(nextFrom <= minDay ? null : nextFrom, nextTo >= maxDay ? null : endOfUtcDay(nextTo));
+    };
+    const spanDays = toIdx - fromIdx + 1;
+
+    return (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pt-3 mt-3 border-t border-border">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-muted shrink-0">Period</span>
+            <div className="flex items-center gap-1 shrink-0">
+                {RANGE_PRESETS.map(p => (
+                    <button key={p.key} type="button"
+                        onClick={() => onChange(presetStart(p.key, bounds.max), null)}
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold font-num transition-colors ${activePreset === p.key ? 'bg-accent/15 text-accent' : 'text-muted hover:text-text hover:bg-overlay'}`}>
+                        {p.label}
+                    </button>
+                ))}
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+                <input type="date" value={toDateInput(effFrom)} min={toDateInput(minDay)} max={toDateInput(effTo)}
+                    onChange={e => { const t = Date.parse(e.target.value); if (!Number.isNaN(t)) commit(Math.min(t, effTo), effTo); }}
+                    className="bg-inset border border-border hover:border-border-strong focus:border-accent/70 rounded-md px-2 py-1 text-[11px] font-num text-text outline-none [color-scheme:dark] [html.light_&]:[color-scheme:light]" aria-label="Period start" />
+                <span className="text-faint text-xs">→</span>
+                <input type="date" value={toDateInput(effTo)} min={toDateInput(effFrom)} max={toDateInput(maxDay)}
+                    onChange={e => { const t = Date.parse(e.target.value); if (!Number.isNaN(t)) commit(effFrom, Math.max(t, effFrom)); }}
+                    className="bg-inset border border-border hover:border-border-strong focus:border-accent/70 rounded-md px-2 py-1 text-[11px] font-num text-text outline-none [color-scheme:dark] [html.light_&]:[color-scheme:light]" aria-label="Period end" />
+            </div>
+            <div className="flex-1 min-w-[220px] flex items-center gap-3">
+                <span className="text-[10px] font-num text-faint shrink-0 hidden md:inline">{fmtShortDate(minDay)}</span>
+                <div className="relative flex-1 h-4">
+                    <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1 rounded-full bg-inset border border-border" />
+                    <div className="absolute top-1/2 -translate-y-1/2 h-1 rounded-full bg-accent/70"
+                        style={{ left: `${pct(fromIdx)}%`, right: `${100 - pct(toIdx)}%` }} />
+                    <input type="range" min={0} max={totalDays} value={fromIdx} aria-label="Period start slider"
+                        onChange={e => { const i = Math.min(Number(e.target.value), toIdx); commit(minDay + i * DAY, effTo); }}
+                        className={`${rangeThumb} w-full ${fromIdx === toIdx ? 'z-20' : 'z-10'}`} />
+                    <input type="range" min={0} max={totalDays} value={toIdx} aria-label="Period end slider"
+                        onChange={e => { const i = Math.max(Number(e.target.value), fromIdx); commit(effFrom, minDay + i * DAY); }}
+                        className={`${rangeThumb} w-full z-10`} />
+                </div>
+                <span className="text-[10px] font-num text-faint shrink-0 hidden md:inline">{fmtShortDate(maxDay)}</span>
+            </div>
+            <span className="text-[10px] font-num text-muted shrink-0">
+                {isAll ? 'Full history' : `${spanDays.toLocaleString()} days`}
+                {!isAll && (
+                    <button type="button" onClick={() => onChange(null, null)} className="ml-2 text-accent hover:underline font-bold">reset</button>
+                )}
+            </span>
+        </div>
+    );
+};
+
 // ─── Main Component ──────────────────────────────────────────────────────────
 
 export default function TradeManager({ setError, bots = [] }) {
@@ -141,6 +245,9 @@ export default function TradeManager({ setError, bots = [] }) {
     const [filterExchange, setFilterExchange] = useState('all');
     const [filterMode, setFilterMode] = useState('all');
     const [filterInterval, setFilterInterval] = useState('all');
+    // Analysis window (ms epoch, null = unbounded). Applies to closed trades and orders.
+    const [dateFrom, setDateFrom] = useState(null);
+    const [dateTo, setDateTo] = useState(null);
 
     // ── Data fetching ─────────────────────────────────────────────────────────
 
@@ -219,18 +326,38 @@ export default function TradeManager({ setError, bots = [] }) {
 
     const resetPage = () => setCurrentPage(1);
 
+    const inWindow = useCallback((iso) => {
+        if (dateFrom === null && dateTo === null) return true;
+        const t = new Date(iso).getTime();
+        if (Number.isNaN(t)) return true;
+        return (dateFrom === null || t >= dateFrom) && (dateTo === null || t <= dateTo);
+    }, [dateFrom, dateTo]);
+
+    // Full span of closed trades (before the date window) — bounds for the slider.
+    const dateBounds = useMemo(() => {
+        let min = Infinity, max = -Infinity;
+        positions.forEach(p => {
+            if (p.status !== 'closed' || !p.closed_at) return;
+            const t = new Date(p.closed_at).getTime();
+            if (Number.isNaN(t)) return;
+            if (t < min) min = t;
+            if (t > max) max = t;
+        });
+        return min === Infinity ? null : { min, max };
+    }, [positions]);
+
     const closedPositions = useMemo(() =>
-        applyFilters(positions.filter(p => p.status === 'closed'))
+        applyFilters(positions.filter(p => p.status === 'closed' && inWindow(p.closed_at)))
             .sort((a, b) => new Date(b.closed_at) - new Date(a.closed_at)),
-    [positions, applyFilters]);
+    [positions, applyFilters, inWindow]);
 
     const activePositions = useMemo(() =>
         applyFilters(positions.filter(p => p.status === 'open')),
     [positions, applyFilters]);
 
     const filteredOrders = useMemo(() =>
-        applyFilters(orders).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)),
-    [orders, applyFilters]);
+        applyFilters(orders.filter(o => inWindow(o.timestamp))).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)),
+    [orders, applyFilters, inWindow]);
 
     // ── Actions ───────────────────────────────────────────────────────────────
 
@@ -525,14 +652,19 @@ export default function TradeManager({ setError, bots = [] }) {
                 });
                 const capital = botCapitals.length > 0 ? Math.max(...botCapitals) : 1000;
                 const strategyPct = capital > 0 ? (strategyPnl / capital) * 100 : 0;
-                const curPrice = livePrices[symbol];
+                // With a bounded window, B&H ends at the last exit inside it instead of today's price
+                let curPrice = livePrices[symbol];
+                if (dateTo !== null) {
+                    const last = d.positions.reduce((acc, p) => (!acc || new Date(p.closed_at) > new Date(acc.closed_at)) ? p : acc, null);
+                    if (last?.entry_price > 0 && typeof last.profit_pct === 'number') curPrice = last.entry_price * (1 + last.profit_pct / 100);
+                }
                 const bhPct = (curPrice && d.firstPrice > 0)
                     ? ((curPrice - d.firstPrice) / d.firstPrice) * 100
                     : null;
                 const edge = bhPct !== null ? strategyPct - bhPct : null;
                 return { symbol, strategyPct, bhPct, edge, strategyPnl };
             });
-    }, [closedPositions, activePositions, livePrices, bots]);
+    }, [closedPositions, activePositions, livePrices, bots, dateTo]);
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -652,6 +784,8 @@ export default function TradeManager({ setError, bots = [] }) {
                         <Button variant="secondary" size="sm" onClick={fetchAllData} loading={loading}>Sync</Button>
                     </div>
                 </div>
+                <DateRangeControl bounds={dateBounds} from={dateFrom} to={dateTo}
+                    onChange={(f, t) => { setDateFrom(f); setDateTo(t); resetPage(); }} />
             </div>
 
             {/* ── STATS GRID ─────────────────────────────────────────────────── */}
