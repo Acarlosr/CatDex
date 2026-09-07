@@ -322,7 +322,7 @@ export default function App() {
       {showBuilder && (
         <div className="absolute inset-0 z-[100] bg-bg fade-in">
            <Suspense fallback={<LazyFallback label="Loading builder" />}>
-             <BotBuilder closeBuilder={() => setShowBuilder(false)} editingBot={editingBot} />
+             <BotBuilder closeBuilder={() => { setShowBuilder(false); refetchBots(); }} editingBot={editingBot} />
            </Suspense>
         </div>
       )}

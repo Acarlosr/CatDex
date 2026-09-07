@@ -481,8 +481,9 @@ export default function TradeManager({ setError, bots = [] }) {
         });
         // Per-bot capital is a separate pool, so total deployed capital is the
         // sum across the bots in view; a single bot is just its own pool.
-        const startingCapital = capitalPerBot.length > 0 ? Math.max(...capitalPerBot) : 1000;
-        const totalCapital = capitalPerBot.length > 0 ? capitalPerBot.reduce((a, b) => a + b, 0) : 1000;
+        // No trades in view → no capital deployed; never fall back to a phantom $1000.
+        const startingCapital = capitalPerBot.length > 0 ? Math.max(...capitalPerBot) : 0;
+        const totalCapital = capitalPerBot.reduce((a, b) => a + b, 0);
 
         let equity = startingCapital, peakEq = startingCapital, maxDDpct = 0;
         for (const p of sorted) {
@@ -803,8 +804,8 @@ export default function TradeManager({ setError, bots = [] }) {
                     />
                     <StatCard
                         label="Starting Capital"
-                        value={`$${safeNum(stats.totalCapital, 0)}`}
-                        sub={stats.botCount > 1 ? `total across ${stats.botCount} bots` : 'allocated to this bot'}
+                        value={stats.botCount > 0 ? `$${safeNum(stats.totalCapital, 0)}` : '—'}
+                        sub={stats.botCount > 1 ? `total across ${stats.botCount} bots` : (stats.botCount === 1 ? 'allocated to this bot' : 'no bots in view')}
                         color="gold"
                     />
                     <StatCard

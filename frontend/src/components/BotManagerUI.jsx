@@ -95,7 +95,6 @@ const PHASE_META = {
 };
 const MODE_LABEL = { live: 'live orders', paper: 'paper (sandbox)', forward_test: 'forward test' };
 
-const fmtMoney = (v) => `${v < 0 ? '-' : '+'}$${Math.abs(Number(v) || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
 const fmtClock = (iso) => {
   if (!iso) return null;
   const d = new Date(iso);
@@ -146,45 +145,6 @@ function StopReason({ bot }) {
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M12 3l9 16H3l9-16z" />
       </svg>
       <p className="text-[10px] text-warn leading-snug"><span className="font-bold uppercase tracking-wider mr-1">Stopped by engine</span>{reason}</p>
-    </div>
-  );
-}
-
-/* Result of the most recent backtest run, persisted by the engine */
-function BacktestSummary({ bot }) {
-  const s = bot.settings?.last_backtest_summary;
-  if (!s) return null;
-  const good = s.net_pnl >= 0;
-  const limit = Number(bot.settings?.max_drawdown) || 0;
-  const ddHit = limit > 0 && s.max_drawdown >= limit;
-  return (
-    <div className="flex flex-col space-y-2 border-t border-border pt-4">
-      <div className="flex justify-between items-end">
-        <span className="text-[9px] font-bold text-muted uppercase tracking-wider">Last Backtest</span>
-        {s.finished_at && <span className="text-[8px] text-faint font-num">{new Date(s.finished_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</span>}
-      </div>
-      <div className="grid grid-cols-4 gap-2">
-        <div className="bg-inset border border-border rounded-md px-2.5 py-2">
-          <p className="text-[8px] font-bold uppercase tracking-wider text-faint">Net PNL</p>
-          <p className={`text-[11px] font-num font-bold ${good ? 'text-success' : 'text-danger'}`}>{fmtMoney(s.net_pnl)}</p>
-          <p className={`text-[8px] font-num ${good ? 'text-success/70' : 'text-danger/70'}`}>{s.return_pct >= 0 ? '+' : ''}{s.return_pct}%</p>
-        </div>
-        <div className="bg-inset border border-border rounded-md px-2.5 py-2">
-          <p className="text-[8px] font-bold uppercase tracking-wider text-faint">Trades</p>
-          <p className="text-[11px] font-num font-bold text-text">{s.trades}</p>
-          <p className="text-[8px] font-num text-muted">{s.wins}W / {s.trades - s.wins}L</p>
-        </div>
-        <div className="bg-inset border border-border rounded-md px-2.5 py-2">
-          <p className="text-[8px] font-bold uppercase tracking-wider text-faint">Win rate</p>
-          <p className="text-[11px] font-num font-bold text-info">{s.win_rate}%</p>
-          <p className="text-[8px] font-num text-muted">{s.candles} candles</p>
-        </div>
-        <div className={`bg-inset border rounded-md px-2.5 py-2 ${ddHit ? 'border-danger/40' : 'border-border'}`}>
-          <p className="text-[8px] font-bold uppercase tracking-wider text-faint">Max DD</p>
-          <p className={`text-[11px] font-num font-bold ${ddHit ? 'text-danger' : 'text-warn'}`}>-{s.max_drawdown}%</p>
-          <p className="text-[8px] font-num text-muted">{limit > 0 ? `limit ${limit}%` : 'no limit'}</p>
-        </div>
-      </div>
     </div>
   );
 }
@@ -317,8 +277,6 @@ const BotCard = memo(function BotCard({ bot, index, busyAction, togglingBot, ope
             </div>
           </label>
         </div>
-
-        <BacktestSummary bot={bot} />
       </div>
 
       {/* ── Console Toggle Bar ── */}
