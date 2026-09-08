@@ -8,10 +8,11 @@
 ![CCXT](https://img.shields.io/badge/CCXT-Integrated-orange?style=for-the-badge)
 ![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)
 ![Status](https://img.shields.io/badge/Status-Beta-green?style=for-the-badge)
+[![License](https://img.shields.io/badge/License-AGPL--3.0-blue?style=for-the-badge)](LICENSE)
 
 ApexAlgo is a full-stack algorithmic trading platform for building, backtesting, and executing systematic trading strategies — without writing code. A node-based visual strategy builder connects directly to a high-performance async execution engine with multi-exchange market data, encrypted exchange key management, and real-time per-bot console output.
 
-> **Beta release.** Joining the beta test? Start with **[BETA.md](BETA.md)** — step-by-step setup, your first bot in 5 minutes, and mandatory safety rules for live trading. Want an AI to design a strategy for you? Paste **[STRATEGY_CONTEXT.md](STRATEGY_CONTEXT.md)** into any AI assistant and import the resulting `.apex.json`. Ready-made strategies live in [`examples/`](examples/).
+> **Open source, beta quality.** ApexAlgo is free software under the [AGPL-3.0](LICENSE) — issues and pull requests are welcome, see [CONTRIBUTING.md](CONTRIBUTING.md). New here? Start with **[BETA.md](BETA.md)** — step-by-step setup, your first bot in 5 minutes, and mandatory safety rules for live trading. Want an AI to design a strategy for you? Paste **[STRATEGY_CONTEXT.md](STRATEGY_CONTEXT.md)** into any AI assistant and import the resulting `.apex.json`. Ready-made strategies live in [`examples/`](examples/).
 
 ---
 
@@ -114,7 +115,7 @@ ApexAlgo is a full-stack algorithmic trading platform for building, backtesting,
 - **ATR & Trailing Stops** — dynamic stop-loss adjustment based on price action
 - **Trade Cooldown** — configurable max entries per N candles
 - **Position Limits** — per-pair or global max concurrent positions
-- **Max Drawdown Auto-Stop** — evaluated after full backtest to gate live entry; during live trading, checked after every closed position. Stops the bot when equity drawdown from peak exceeds the configured threshold
+- **Max Drawdown Guard** — evaluated after full backtest to gate live entry; during live trading, checked after every closed position. Default action `close_all` closes every position and stops the bot; opt-in `block_entries` pauses new entries until drawdown recovers below half the limit while exits keep running (simulated identically in the backtest). A separate **Max Capital Loss** guard (loss of starting capital) is the hard stop for either mode
 - **Max Order Value Guard** — rejects live orders exceeding a configurable USD limit
 
 ### Order Safety
@@ -484,6 +485,14 @@ Adding support for any other CCXT-compatible exchange requires only adding it to
 
 ---
 
+## Contributing
+
+Bug reports, feature requests and pull requests are welcome. `dev` is the working branch and `master` only receives releases — open pull requests against `dev`. Read **[CONTRIBUTING.md](CONTRIBUTING.md)** for the workflow, code style and what to include in a bug report. Ready-made strategies for [`examples/`](examples/) are a great first contribution.
+
+Found a security vulnerability? Please **do not** open a public issue — follow **[SECURITY.md](SECURITY.md)** instead.
+
+---
+
 ## Security
 
 - Exchange API keys are encrypted at rest using Fernet symmetric encryption
@@ -501,8 +510,21 @@ Adding support for any other CCXT-compatible exchange requires only adding it to
 
 ApexAlgo is experimental software. Algorithmic trading carries significant financial risk. This project is provided as-is, without warranty of any kind. Use at your own risk.
 
+Nothing in this repository is financial advice. Backtest results are not a guarantee of future performance, and the example strategies are educational — not recommendations. Always start in paper mode, use exchange API keys without withdrawal permissions and never trade with money you cannot afford to lose.
+
+As stated in sections 15 and 16 of the license: there is **no warranty** for the program, and the authors and contributors are **not liable** for any damages — including lost funds — arising from its use.
+
 ---
 
 ## License
 
-This project does not currently have an open-source license. All rights reserved.
+ApexAlgo is free software, licensed under the **GNU Affero General Public License v3.0** — see [LICENSE](LICENSE) for the full text.
+
+Copyright (C) 2026 ApexAlgo contributors
+
+In plain terms: you may use, study, modify and redistribute ApexAlgo freely, including commercially. If you distribute a modified version — or run a modified version as a service that others use over a network — you must make your modified source code available to those users under the same license.
+
+### Third-party notices
+
+- Charts are powered by [TradingView Lightweight Charts](https://github.com/tradingview/lightweight-charts) (Apache-2.0).
+- All other dependencies (CCXT, FastAPI, React, ReactFlow, pandas-ta, …) are distributed under permissive licenses (MIT, BSD, Apache-2.0, MPL-2.0); see [`requirements.txt`](requirements.txt) and [`frontend/package.json`](frontend/package.json).
