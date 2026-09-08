@@ -9,7 +9,7 @@ import pandas as pd
 import ccxt
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
-from sqlalchemy import text
+from sqlalchemy import text, func
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.attributes import flag_modified
@@ -142,13 +142,15 @@ class BotManager:
         task.add_done_callback(self._bg_tasks.discard)
         return task
 
-    def _get_drawdown(self, bot_name, db, mode_group="live", starting_capital=1000.0):
+    def _get_drawdown(self, bot_name, db, mode_group="live", starting_capital=1000.0, peak_reset_at=None):
         """Return cached drawdown state, lazy-initializing from DB on first access.
         mode_group: "backtest" for backtest-only, "live" for forward_test/paper/live.
-        starting_capital: wallet size used as equity base for percentage calculation."""
+        starting_capital: wallet size used as equity base for percentage calculation.
+        peak_reset_at: naive-UTC datetime; closes before it only move the equity
+        base (block_entries cooldown started a new drawdown campaign there)."""
         cache_key = (bot_name, mode_group)
         if cache_key not in self._drawdown_cache:
-            query = db.query(Position.profit_abs).filter(
+            query = db.query(Position.profit_abs, Position.closed_at).filter(
                 Position.bot_name == bot_name, Position.status == "closed"
             )
             if mode_group == "backtest":
@@ -162,6 +164,9 @@ class BotManager:
             for cp in closed:
                 running += (cp.profit_abs or 0)
                 equity = starting_capital + running
+                if peak_reset_at is not None and cp.closed_at is not None and cp.closed_at < peak_reset_at:
+                    peak_equity = equity  # pre-reset history: base only, no drawdown
+                    continue
                 peak_equity = max(peak_equity, equity)
                 if peak_equity > 0:
                     dd = max(dd, ((peak_equity - equity) / peak_equity) * 100)
@@ -704,11 +709,17 @@ class BotManager:
             bt_max_dd = 0.0  # peak-to-trough on the mark-to-market equity curve
             bt_max_loss = 0.0  # worst loss of principal vs. starting capital (%)
             # Drawdown handling mirrors live: close_all (legacy) stops the bot
-            # after the backtest; block_entries pauses entries until recovery.
+            # after the backtest; block_entries pauses entries until recovery
+            # (dd back under half the limit) or, once flat, until the cooldown
+            # has passed — the peak is then reset so the guard re-arms from the
+            # new baseline instead of blocking forever on realized equity.
             bt_dd_action = bot.settings.get("drawdown_action", "close_all")
             bt_dd_limit = _num(bot.settings.get("max_drawdown"), 0)
+            bt_dd_cooldown_secs = _num(bot.settings.get("drawdown_cooldown_days"), 7) * 86400
             bt_entries_blocked = False
             bt_blocked_secs = 0.0
+            bt_block_count = 0
+            bt_flat_since = None
             bt_prev_ts = None
             # Detail for the post-backtest gate log (peak/trough of the worst dip)
             bt_peak_ts = None
@@ -1059,17 +1070,29 @@ class BotManager:
                     if bt_starting_capital > 0:
                         bt_max_loss = max(bt_max_loss, ((bt_starting_capital - equity_now) / bt_starting_capital) * 100)
 
-                    # block_entries: same rule as live — pause entries on breach,
-                    # resume once drawdown recovers below half the limit or the
-                    # bot is flat (with nothing open, realized equity can no
-                    # longer recover on its own — a permanent block would follow)
+                    # block_entries: same rule as live — pause entries on breach;
+                    # resume once drawdown recovers below half the limit, or once
+                    # the bot has been flat for the cooldown (realized equity can't
+                    # recover on its own, so the peak is reset to start a new
+                    # campaign; max_capital_loss remains the absolute stop)
                     if bt_dd_action == "block_entries" and bt_dd_limit > 0:
                         if bt_entries_blocked and bt_prev_ts is not None:
                             bt_blocked_secs += max(0.0, (ts - bt_prev_ts).total_seconds())
-                        if not bt_entries_blocked and dd_now >= bt_dd_limit and open_value > 0:
+                        if not bt_entries_blocked and dd_now >= bt_dd_limit:
                             bt_entries_blocked = True
-                        elif bt_entries_blocked and (dd_now < bt_dd_limit * 0.5 or open_value <= 0):
-                            bt_entries_blocked = False
+                            bt_block_count += 1
+                            bt_flat_since = None
+                        elif bt_entries_blocked:
+                            if open_value <= 0:
+                                bt_flat_since = bt_flat_since or ts
+                            else:
+                                bt_flat_since = None
+                            if dd_now < bt_dd_limit * 0.5:
+                                bt_entries_blocked = False
+                            elif bt_flat_since is not None and (ts - bt_flat_since).total_seconds() >= bt_dd_cooldown_secs:
+                                bt_entries_blocked = False
+                                bt_peak_equity = equity_now
+                                bt_peak_ts = ts
                     bt_prev_ts = ts
 
             # Close any trailing open backtest positions at the last available price.
@@ -1152,6 +1175,7 @@ class BotManager:
                         "max_drawdown": round(bt_max_dd, 2),
                         "max_capital_loss": round(bt_max_loss, 2),
                         "entries_blocked_days": round(bt_blocked_secs / 86400, 1),
+                        "entries_blocked_count": bt_block_count,
                         "candles": sum(len(c["df"]) for c in sym_contexts),
                         "finished_at": datetime.now(timezone.utc).isoformat(),
                     }
@@ -1182,7 +1206,7 @@ class BotManager:
                         # Informative only: the same rule already paused entries
                         # inside the simulation, so the numbers reflect it
                         logger.warning("Bot '%s' backtest drawdown %.2f%% >= %.2f%% (block_entries) — going live with entries paused on breach", bot.name, bt_max_dd, max_drawdown_pct)
-                        blb.push(bot.name, "WARN", f"Backtest max drawdown {bt_max_dd:.1f}% ({detail}). Entries were blocked for {bt_blocked_secs / 86400:.0f} days — bot continues, new entries pause on breach.")
+                        blb.push(bot.name, "WARN", f"Backtest max drawdown {bt_max_dd:.1f}% ({detail}). Entries were blocked {bt_block_count}x for {bt_blocked_secs / 86400:.0f} days in total (cooldown {bt_dd_cooldown_secs / 86400:.0f}d) — bot continues, new entries pause on breach.")
                     else:
                         logger.warning("Bot '%s' backtest drawdown (%.2f%%) exceeds max (%.2f%%), stopping before live", bot.name, bt_max_dd, max_drawdown_pct)
                         blb.push(bot.name, "WARN", f"Backtest max drawdown {bt_max_dd:.1f}% >= {max_drawdown_pct:.0f}% ({detail}), bot stopped — not allowed to go live")
@@ -1344,7 +1368,12 @@ class BotManager:
                     dd_action = bot.settings.get("drawdown_action", "close_all")
                     if max_drawdown_pct > 0 or max_capital_loss_pct > 0:
                         live_capital = _num(bot.settings.get("backtest_capital"), 1000)
-                        dd_state = self._get_drawdown(bot.name, db, mode_group="live", starting_capital=live_capital)
+                        _reset_raw = bot.settings.get("drawdown_peak_reset_at")
+                        try:
+                            _peak_reset_at = _naive_utc(datetime.fromisoformat(_reset_raw)) if _reset_raw else None
+                        except (ValueError, TypeError):
+                            _peak_reset_at = None
+                        dd_state = self._get_drawdown(bot.name, db, mode_group="live", starting_capital=live_capital, peak_reset_at=_peak_reset_at)
                         dd_now, loss_now = self._dd_now(dd_state)
 
                         stop_reason = None
@@ -1367,22 +1396,34 @@ class BotManager:
                             continue
 
                         if max_drawdown_pct > 0 and dd_action == "block_entries":
-                            # The block protects open positions from being added to
-                            # during a dip. A flat bot is never blocked: realized
-                            # equity cannot recover without trades, so it would stay
-                            # blocked forever (the capital-loss guard is the hard stop).
+                            # Block on breach; release when drawdown recovers below
+                            # half the limit, or once the bot has been flat for the
+                            # cooldown — realized equity cannot recover without
+                            # trades, so the peak is reset (persisted in settings so
+                            # a restart doesn't re-block) and a new campaign starts.
+                            # max_capital_loss stays the absolute stop across campaigns.
                             _open_any = sum(len(v) for k, v in _positions_by_bot_mode.items() if k[0] == bot.name and k[1] != "backtest")
-                            if bot.name not in self._entries_blocked and dd_now >= max_drawdown_pct and _open_any > 0:
+                            _cooldown_days = _num(bot.settings.get("drawdown_cooldown_days"), 7)
+                            if bot.name not in self._entries_blocked and dd_now >= max_drawdown_pct:
                                 self._entries_blocked.add(bot.name)
                                 logger.warning("Bot '%s' drawdown %.2f%% > %.2f%% — new entries blocked", bot.name, dd_now, max_drawdown_pct)
-                                blb.push(bot.name, "WARN", f"Max drawdown {dd_now:.1f}% > {max_drawdown_pct:.0f}% — new entries blocked (open positions keep their exits)")
+                                blb.push(bot.name, "WARN", f"Max drawdown {dd_now:.1f}% > {max_drawdown_pct:.0f}% — new entries blocked (open positions keep their exits; resumes below {max_drawdown_pct * 0.5:.1f}% or after {_cooldown_days:.0f}d flat)")
                             elif bot.name in self._entries_blocked:
                                 if dd_now < max_drawdown_pct * 0.5:
                                     self._entries_blocked.discard(bot.name)
                                     blb.push(bot.name, "INFO", f"Drawdown recovered to {dd_now:.1f}% — new entries allowed again")
                                 elif _open_any == 0:
-                                    self._entries_blocked.discard(bot.name)
-                                    blb.push(bot.name, "INFO", f"All positions closed at {dd_now:.1f}% drawdown — new entries allowed again (capital-loss guard remains)")
+                                    _last_close = db.query(func.max(Position.closed_at)).filter(
+                                        Position.bot_name == bot.name, Position.status == "closed",
+                                        Position.mode.in_(["forward_test", "paper", "live"])).scalar()
+                                    _now_ts = _naive_utc(datetime.now(timezone.utc))
+                                    _flat_secs = (_now_ts - _last_close).total_seconds() if _last_close is not None else float("inf")
+                                    if _flat_secs >= _cooldown_days * 86400:
+                                        self._entries_blocked.discard(bot.name)
+                                        bot.settings = {**bot.settings, "drawdown_peak_reset_at": _now_ts.isoformat()}
+                                        self._drawdown_cache.pop((bot.name, "live"), None)
+                                        db.commit()
+                                        blb.push(bot.name, "INFO", f"Flat for {_cooldown_days:.0f} days at {dd_now:.1f}% drawdown — peak reset, new entries allowed again (capital-loss guard remains)")
                     entries_blocked = bot.name in self._entries_blocked
 
                     # Reuse indicator computation across bots with identical indicator configs

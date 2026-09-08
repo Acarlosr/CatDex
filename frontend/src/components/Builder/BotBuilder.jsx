@@ -75,6 +75,7 @@ function rebuildLayoutFromSettings(settings, updateNodeData, deleteNode) {
             maxDrawdown: settings.max_drawdown ?? 0,
             drawdownAction: settings.drawdown_action || 'close_all',
             maxCapitalLoss: settings.max_capital_loss ?? 0,
+            drawdownCooldownDays: settings.drawdown_cooldown_days ?? 7,
             maxOrderValue: settings.max_order_value ?? 0,
         }
     });
@@ -453,6 +454,7 @@ const BotBuilderFlow = ({ closeBuilder, editingBot }) => {
                 max_drawdown: configNode.data.maxDrawdown || 0,
                 drawdown_action: configNode.data.drawdownAction || 'close_all',
                 max_capital_loss: configNode.data.maxCapitalLoss || 0,
+                drawdown_cooldown_days: configNode.data.drawdownCooldownDays === "" || configNode.data.drawdownCooldownDays === undefined ? 7 : configNode.data.drawdownCooldownDays,
                 max_order_value: configNode.data.maxOrderValue || 0,
                 api_execution: configNode.data.executionMode === 'exchange',
                 backtest_on_start: backtestNode ? backtestNode.data.runOnStart : false,

@@ -91,6 +91,12 @@ def validate_bot_settings(settings: dict, exchange_id: str | None = None) -> dic
     except (ValueError, TypeError):
         max_capital_loss = 0
         errors.append(f"max_capital_loss '{settings.get('max_capital_loss')}' is not a valid number.")
+    try:
+        cooldown_days = float(settings.get("drawdown_cooldown_days", 7) or 0)
+        if cooldown_days < 0 or cooldown_days > 365:
+            errors.append("drawdown_cooldown_days must be between 0 and 365.")
+    except (ValueError, TypeError):
+        errors.append(f"drawdown_cooldown_days '{settings.get('drawdown_cooldown_days')}' is not a valid number.")
     if dd_action == "block_entries":
         try:
             _dd_limit = float(settings.get("max_drawdown") or 0)

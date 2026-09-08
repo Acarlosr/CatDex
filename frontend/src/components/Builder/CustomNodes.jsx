@@ -177,8 +177,15 @@ export const BotConfigNode = ({ id, data }) => (
           <option value="close_all">Close all & stop (default)</option>
           <option value="block_entries">Block new entries, keep exits</option>
         </select>
-        <span className="text-[9px] text-muted block mt-1">{(data.drawdownAction || 'close_all') === 'block_entries' ? 'Entries pause until drawdown recovers below half the limit. Does not cap losses — set Max Capital Loss.' : 'Closes every open position and stops the bot'}</span>
+        <span className="text-[9px] text-muted block mt-1">{(data.drawdownAction || 'close_all') === 'block_entries' ? 'Entries pause until drawdown recovers below half the limit, or the bot has been flat for the cooldown (peak resets). Does not cap losses — set Max Capital Loss.' : 'Closes every open position and stops the bot'}</span>
       </div>
+      {(data.drawdownAction || 'close_all') === 'block_entries' && (
+        <div className="pt-2 border-t border-border">
+          <label className="text-[10px] text-muted font-bold uppercase mb-1.5 block">Drawdown Cooldown (days)</label>
+          <input type="number" step="1" min="0" max="365" className="w-full bg-inset border border-border text-accent text-xs rounded-md p-2 nodrag focus:border-purple outline-none font-num text-center" value={data.drawdownCooldownDays !== undefined ? data.drawdownCooldownDays : 7} onChange={(e) => data.onChange(id, 'drawdownCooldownDays', e.target.value === "" ? "" : parseFloat(e.target.value))} />
+          <span className="text-[9px] text-muted block mt-1">How long the bot must stay flat before entries resume from a fresh peak. 0 = resume as soon as flat.</span>
+        </div>
+      )}
       <div className="pt-2 border-t border-border">
         <label className="text-[10px] text-muted font-bold uppercase mb-1.5 block">Max Capital Loss % (0 = Off)</label>
         <input type="number" step="0.1" min="0" max="99" className="w-full bg-inset border border-border text-accent text-xs rounded-md p-2 nodrag focus:border-purple outline-none font-num text-center" value={data.maxCapitalLoss !== undefined ? data.maxCapitalLoss : 0} onChange={(e) => data.onChange(id, 'maxCapitalLoss', e.target.value === "" ? "" : parseFloat(e.target.value))} />
