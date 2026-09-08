@@ -716,6 +716,8 @@ class BotManager:
             bt_dd_action = bot.settings.get("drawdown_action", "close_all")
             bt_dd_limit = _num(bot.settings.get("max_drawdown"), 0)
             bt_dd_cooldown_secs = _num(bot.settings.get("drawdown_cooldown_days"), 7) * 86400
+            bt_loss_limit = _num(bot.settings.get("max_capital_loss"), 0)
+            bt_wind_down = False  # capital-loss breach with block_entries: no more entries, ever
             bt_entries_blocked = False
             bt_blocked_secs = 0.0
             bt_block_count = 0
@@ -1075,7 +1077,12 @@ class BotManager:
                     # the bot has been flat for the cooldown (realized equity can't
                     # recover on its own, so the peak is reset to start a new
                     # campaign; max_capital_loss remains the absolute stop)
-                    if bt_dd_action == "block_entries" and bt_dd_limit > 0:
+                    if bt_dd_action == "block_entries" and bt_loss_limit > 0 and not bt_wind_down and bt_max_loss >= bt_loss_limit:
+                        # Same as live: loss of principal winds the bot down
+                        bt_wind_down = True
+                        bt_entries_blocked = True
+                        bt_block_count += 1
+                    if bt_dd_action == "block_entries" and bt_dd_limit > 0 and not bt_wind_down:
                         if bt_entries_blocked and bt_prev_ts is not None:
                             bt_blocked_secs += max(0.0, (ts - bt_prev_ts).total_seconds())
                         if not bt_entries_blocked and dd_now >= bt_dd_limit:
@@ -1377,9 +1384,20 @@ class BotManager:
                         dd_now, loss_now = self._dd_now(dd_state)
 
                         stop_reason = None
+                        _open_any = sum(len(v) for k, v in _positions_by_bot_mode.items() if k[0] == bot.name and k[1] != "backtest")
                         if max_capital_loss_pct > 0 and loss_now >= max_capital_loss_pct:
-                            blb.push(bot.name, "WARN", f"Capital loss {loss_now:.1f}% > {max_capital_loss_pct:.0f}% — bot stopped")
-                            stop_reason = f"Capital loss {loss_now:.1f}% hit the {max_capital_loss_pct:.0f}% limit — positions closed"
+                            if dd_action == "block_entries" and _open_any > 0:
+                                # Wind down: no new entries, exits keep running,
+                                # the bot stops on the tick it turns flat. Loss of
+                                # principal never recovers without trades, so
+                                # unlike the drawdown block there is no resume.
+                                if bot.name not in self._entries_blocked:
+                                    self._entries_blocked.add(bot.name)
+                                    logger.warning("Bot '%s' capital loss %.2f%% > %.2f%% — winding down (entries blocked, stops when flat)", bot.name, loss_now, max_capital_loss_pct)
+                                    blb.push(bot.name, "WARN", f"Capital loss {loss_now:.1f}% > {max_capital_loss_pct:.0f}% — winding down: entries blocked, {_open_any} open position(s) keep their exits, bot stops when flat")
+                            else:
+                                blb.push(bot.name, "WARN", f"Capital loss {loss_now:.1f}% > {max_capital_loss_pct:.0f}% — bot stopped")
+                                stop_reason = f"Capital loss {loss_now:.1f}% hit the {max_capital_loss_pct:.0f}% limit — " + ("bot flat, stopped" if _open_any == 0 else "positions closed")
                         elif max_drawdown_pct > 0 and dd_action != "block_entries" and dd_state["max_dd"] >= max_drawdown_pct:
                             blb.push(bot.name, "WARN", f"Max drawdown hit ({dd_state['max_dd']:.2f}% >= {max_drawdown_pct:.2f}%), auto-stopping")
                             stop_reason = f"Live drawdown {dd_state['max_dd']:.1f}% hit the {max_drawdown_pct:.0f}% limit — positions closed"
@@ -1395,14 +1413,14 @@ class BotManager:
                             db.commit()
                             continue
 
-                        if max_drawdown_pct > 0 and dd_action == "block_entries":
+                        _capital_wind_down = max_capital_loss_pct > 0 and loss_now >= max_capital_loss_pct
+                        if max_drawdown_pct > 0 and dd_action == "block_entries" and not _capital_wind_down:
                             # Block on breach; release when drawdown recovers below
                             # half the limit, or once the bot has been flat for the
                             # cooldown — realized equity cannot recover without
                             # trades, so the peak is reset (persisted in settings so
                             # a restart doesn't re-block) and a new campaign starts.
                             # max_capital_loss stays the absolute stop across campaigns.
-                            _open_any = sum(len(v) for k, v in _positions_by_bot_mode.items() if k[0] == bot.name and k[1] != "backtest")
                             _cooldown_days = _num(bot.settings.get("drawdown_cooldown_days"), 7)
                             if bot.name not in self._entries_blocked and dd_now >= max_drawdown_pct:
                                 self._entries_blocked.add(bot.name)

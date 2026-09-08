@@ -115,7 +115,7 @@ ApexAlgo is a full-stack algorithmic trading platform for building, backtesting,
 - **ATR & Trailing Stops** — dynamic stop-loss adjustment based on price action
 - **Trade Cooldown** — configurable max entries per N candles
 - **Position Limits** — per-pair or global max concurrent positions
-- **Max Drawdown Guard** — evaluated after full backtest to gate live entry; during live trading, checked after every closed position. Default action `close_all` closes every position and stops the bot; opt-in `block_entries` pauses new entries until drawdown recovers below half the limit — or the bot has been flat for a configurable cooldown (default 7 days), after which the peak resets — while exits keep running (simulated identically in the backtest). A separate **Max Capital Loss** guard (loss of starting capital) is the hard stop for either mode
+- **Max Drawdown Guard** — evaluated after full backtest to gate live entry; during live trading, checked after every closed position. Default action `close_all` closes every position and stops the bot; opt-in `block_entries` pauses new entries until drawdown recovers below half the limit — or the bot has been flat for a configurable cooldown (default 7 days), after which the peak resets — while exits keep running (simulated identically in the backtest). A separate **Max Capital Loss** guard (loss of starting capital) is the hard stop and follows the same action: close everything immediately, or wind down (no new entries, exits finish, then stop)
 - **Max Order Value Guard** — rejects live orders exceeding a configurable USD limit
 
 ### Order Safety

@@ -172,12 +172,17 @@ export const BotConfigNode = ({ id, data }) => (
         <span className="text-[9px] text-muted block mt-1">Peak-to-trough on the equity curve, checked after the backtest and after every closed trade</span>
       </div>
       <div className="pt-2 border-t border-border">
-        <label className="text-[10px] text-muted font-bold uppercase mb-1.5 block">On Max Drawdown</label>
+        <label className="text-[10px] text-muted font-bold uppercase mb-1.5 block">Max Capital Loss % (0 = Off)</label>
+        <input type="number" step="0.1" min="0" max="99" className="w-full bg-inset border border-border text-accent text-xs rounded-md p-2 nodrag focus:border-purple outline-none font-num text-center" value={data.maxCapitalLoss !== undefined ? data.maxCapitalLoss : 0} onChange={(e) => data.onChange(id, 'maxCapitalLoss', e.target.value === "" ? "" : parseFloat(e.target.value))} />
+        <span className="text-[9px] text-muted block mt-1">Loss of starting capital, independent of drawdown — never resumes. Required for live bots that block entries.</span>
+      </div>
+      <div className="pt-2 border-t border-border">
+        <label className="text-[10px] text-muted font-bold uppercase mb-1.5 block">On Limit Breach (drawdown or capital loss)</label>
         <select className="w-full bg-inset border border-border text-accent text-xs rounded-md p-2 nodrag focus:border-purple outline-none" value={data.drawdownAction || 'close_all'} onChange={(e) => data.onChange(id, 'drawdownAction', e.target.value)}>
           <option value="close_all">Close all & stop (default)</option>
           <option value="block_entries">Block new entries, keep exits</option>
         </select>
-        <span className="text-[9px] text-muted block mt-1">{(data.drawdownAction || 'close_all') === 'block_entries' ? 'Entries pause until drawdown recovers below half the limit, or the bot has been flat for the cooldown (peak resets). Does not cap losses — set Max Capital Loss.' : 'Closes every open position and stops the bot'}</span>
+        <span className="text-[9px] text-muted block mt-1">{(data.drawdownAction || 'close_all') === 'block_entries' ? 'Drawdown: entries pause until it recovers below half the limit, or the bot has been flat for the cooldown (peak resets). Capital loss: entries stop for good, exits finish, then the bot stops.' : 'Market-closes every open position and stops the bot immediately'}</span>
       </div>
       {(data.drawdownAction || 'close_all') === 'block_entries' && (
         <div className="pt-2 border-t border-border">
@@ -186,11 +191,6 @@ export const BotConfigNode = ({ id, data }) => (
           <span className="text-[9px] text-muted block mt-1">How long the bot must stay flat before entries resume from a fresh peak. 0 = resume as soon as flat.</span>
         </div>
       )}
-      <div className="pt-2 border-t border-border">
-        <label className="text-[10px] text-muted font-bold uppercase mb-1.5 block">Max Capital Loss % (0 = Off)</label>
-        <input type="number" step="0.1" min="0" max="99" className="w-full bg-inset border border-border text-accent text-xs rounded-md p-2 nodrag focus:border-purple outline-none font-num text-center" value={data.maxCapitalLoss !== undefined ? data.maxCapitalLoss : 0} onChange={(e) => data.onChange(id, 'maxCapitalLoss', e.target.value === "" ? "" : parseFloat(e.target.value))} />
-        <span className="text-[9px] text-muted block mt-1">Hard stop: loss of starting capital, independent of drawdown. Required for live bots that block entries.</span>
-      </div>
       <div className="pt-2 border-t border-border">
         <label className="text-[10px] text-muted font-bold uppercase mb-1.5 block">Max Order Value USD (0 = Off)</label>
         <input type="number" step="1" className="w-full bg-inset border border-border text-accent text-xs rounded-md p-2 nodrag focus:border-purple outline-none font-num text-center" value={data.maxOrderValue !== undefined ? data.maxOrderValue : 0} onChange={(e) => data.onChange(id, 'maxOrderValue', e.target.value === "" ? "" : parseFloat(e.target.value))} />
