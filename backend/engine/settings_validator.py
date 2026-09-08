@@ -193,6 +193,15 @@ def validate_bot_settings(settings: dict, exchange_id: str | None = None) -> dic
         if cat not in VALID_CLOSE_AMOUNT_TYPES:
             errors.append(f"Take profit #{i}: invalid close_amount_type '{cat}'.")
 
+    # Live allocation: share of the exchange wallet this bot may deploy
+    if settings.get("live_allocation_pct") not in (None, ""):
+        try:
+            alloc = float(settings.get("live_allocation_pct"))
+            if alloc <= 0 or alloc > 100:
+                errors.append("live_allocation_pct must be between 0 (exclusive) and 100.")
+        except (ValueError, TypeError):
+            errors.append(f"live_allocation_pct '{settings.get('live_allocation_pct')}' is not a valid number.")
+
     # API execution
     if settings.get("api_execution") and not settings.get("api_key_name"):
         errors.append("api_execution is enabled but no api_key_name specified.")

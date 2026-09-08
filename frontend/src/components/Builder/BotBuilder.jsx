@@ -46,7 +46,7 @@ function rebuildLayoutFromSettings(settings, updateNodeData, deleteNode) {
     // Config is w-[340px] fixed; the context blocks render wider than their
     // min-w because of content, so measure generously to avoid overlap
     const SIZE = {
-        config:    { w: 340, h: 860 },
+        config:    { w: 340, h: 1100 }, // 12 fields incl. guards + live allocation; cooldown row is conditional
         whitelist: { w: 320, h: 200 },
         backtest:  { w: 320, h: 220 },
         apiKey:    { w: 320, h: 240 },
@@ -76,6 +76,7 @@ function rebuildLayoutFromSettings(settings, updateNodeData, deleteNode) {
             drawdownAction: settings.drawdown_action || 'close_all',
             maxCapitalLoss: settings.max_capital_loss ?? 0,
             drawdownCooldownDays: settings.drawdown_cooldown_days ?? 7,
+            liveAllocationPct: settings.live_allocation_pct ?? 100,
             maxOrderValue: settings.max_order_value ?? 0,
         }
     });
@@ -129,7 +130,7 @@ function rebuildLayoutFromSettings(settings, updateNodeData, deleteNode) {
     const C4_X = C3_X + SIZE.logic.w + COL_GAP;          // 1060: actions
     const C5_X = C4_X + SIZE.action.w + COL_GAP;         // 1480: TP / SL
 
-    const strategyY = 50 + SIZE.config.h + GAP;          // 600
+    const strategyY = 50 + SIZE.config.h + GAP;          // below the config column
     let c1Y = strategyY, c2Y = strategyY, c3Y = strategyY;
 
     // Compute indicator height based on param count + output line selector
@@ -455,6 +456,7 @@ const BotBuilderFlow = ({ closeBuilder, editingBot }) => {
                 drawdown_action: configNode.data.drawdownAction || 'close_all',
                 max_capital_loss: configNode.data.maxCapitalLoss || 0,
                 drawdown_cooldown_days: configNode.data.drawdownCooldownDays === "" || configNode.data.drawdownCooldownDays === undefined ? 7 : configNode.data.drawdownCooldownDays,
+                live_allocation_pct: configNode.data.liveAllocationPct === "" || configNode.data.liveAllocationPct === undefined ? 100 : configNode.data.liveAllocationPct,
                 max_order_value: configNode.data.maxOrderValue || 0,
                 api_execution: configNode.data.executionMode === 'exchange',
                 backtest_on_start: backtestNode ? backtestNode.data.runOnStart : false,

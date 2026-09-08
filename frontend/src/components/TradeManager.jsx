@@ -269,6 +269,18 @@ const DateRangeControl = ({ bounds, from, to, onChange }) => {
 
 // ─── Main Component ──────────────────────────────────────────────────────────
 
+// Starting capital of a bot for a set of positions: paper/live trades run on the
+// wallet snapshot taken at go-live (live_starting_capital), everything else on
+// the backtest pool. Mixed views fall back to the backtest pool.
+const botCapital = (bot, modes) => {
+    const s = bot?.settings || {};
+    const live = Number(s.live_starting_capital);
+    const onlyReal = modes && modes.size > 0 && [...modes].every(m => m === 'paper' || m === 'live');
+    if (onlyReal && live > 0) return live;
+    return Number(s.backtest_capital) || 1000;
+};
+const modesOf = (positions) => new Set(positions.map(p => p.mode).filter(Boolean));
+
 export default function TradeManager({ setError, bots = [] }) {
     const [positions, setPositions] = useState([]);
     const [orders, setOrders] = useState([]);
@@ -518,10 +530,8 @@ export default function TradeManager({ setError, bots = [] }) {
         const sorted = [...closedPositions].sort((a, b) => new Date(a.closed_at) - new Date(b.closed_at));
         // Look up backtest_capital from bot config (default $1000)
         const filteredBotNames = [...new Set(sorted.map(p => p.bot_name).filter(Boolean))];
-        const capitalPerBot = filteredBotNames.map(name => {
-            const bot = bots.find(b => b.name === name);
-            return bot?.settings?.backtest_capital || 1000;
-        });
+        const viewModes = modesOf(sorted);
+        const capitalPerBot = filteredBotNames.map(name => botCapital(bots.find(b => b.name === name), viewModes));
         // Per-bot capital is a separate pool, so total deployed capital is the
         // sum across the bots in view; a single bot is just its own pool.
         // No trades in view → no capital deployed; never fall back to a phantom $1000.
@@ -609,7 +619,7 @@ export default function TradeManager({ setError, bots = [] }) {
             }
             return [...groups.values()].map(g => {
                 const bot = bots.find(b => b.name === g.key);
-                const capital = bot?.settings?.backtest_capital || null;
+                const capital = bot ? botCapital(bot, g.modes) : null;
                 return {
                     ...g,
                     modes: [...g.modes],
@@ -729,7 +739,8 @@ export default function TradeManager({ setError, bots = [] }) {
         const sorted = [...closedPositions].sort((a, b) => new Date(a.closed_at) - new Date(b.closed_at));
         // Starting equity = sum of the pools of the bots in view (same rule as the stats grid)
         const names = [...new Set(sorted.map(p => p.bot_name).filter(Boolean))];
-        const capital = names.reduce((a, n) => a + (bots.find(b => b.name === n)?.settings?.backtest_capital || 1000), 0);
+        const viewModes = modesOf(sorted);
+        const capital = names.reduce((a, n) => a + botCapital(bots.find(b => b.name === n), viewModes), 0);
         const result = [];
         let cum = 0, peak = capital;
         for (const p of sorted) {
@@ -773,10 +784,8 @@ export default function TradeManager({ setError, bots = [] }) {
                 const strategyPnl = d.positions.reduce((s, p) => s + (p.profit_abs || 0), 0);
                 // Strategy % = total PnL / backtest_capital — same $1000 base as B&H comparison
                 const botNames = [...new Set(d.positions.map(p => p.bot_name).filter(Boolean))];
-                const botCapitals = botNames.map(name => {
-                    const bot = bots.find(b => b.name === name);
-                    return bot?.settings?.backtest_capital || 1000;
-                });
+                const symModes = modesOf(d.positions);
+                const botCapitals = botNames.map(name => botCapital(bots.find(b => b.name === name), symModes));
                 const capital = botCapitals.length > 0 ? Math.max(...botCapitals) : 1000;
                 const strategyPct = capital > 0 ? (strategyPnl / capital) * 100 : 0;
                 // With a bounded window, B&H ends at the last exit inside it instead of today's price

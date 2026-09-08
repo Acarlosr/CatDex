@@ -314,6 +314,7 @@ AI assistants can generate `.apex.json` files that users import directly into Ap
       "max_capital_loss": 0,
       "drawdown_cooldown_days": 7,
       "max_order_value": 0,
+      "live_allocation_pct": 100,
       "api_execution": false,
       "backtest_on_start": true,
       "backtest_capital": 1000,
@@ -346,6 +347,7 @@ AI assistants can generate `.apex.json` files that users import directly into Ap
 | `drawdown_cooldown_days` | number 0–365 | Only for `block_entries`: how long the bot must stay flat (no open positions) while blocked before entries resume from a fresh peak. Default 7; 0 = resume as soon as flat. Without a reset, realized equity could never recover and the block would be permanent. |
 | `max_capital_loss` | number | Hard stop in % of starting capital (0 = off): `(start_capital - equity) / start_capital`. Independent of `max_drawdown`. `drawdown_action` applies here too: `close_all` market-closes everything and stops immediately; `block_entries` winds the bot down — no new entries ever again, open positions finish via their exits, then the bot stops. Required (> 0) for live bots that use `block_entries`. |
 | `max_order_value` | number | Max USD per live order (0 = off) |
+| `live_allocation_pct` | number 1–100 | Paper/live only: share of the exchange wallet (free quote balance + capital deployed by all bots on the same API key) this bot may deploy. Entry sizing runs against `allocation − already deployed by this bot`, so several bots can share one key by splitting the percentage (e.g. 40/60). Default 100. `backtest_capital` is ignored for live sizing; the wallet snapshot at go-live is stored as `live_starting_capital` and used as the base for live drawdown/capital-loss guards. |
 | `api_execution` | bool | `true` for live/paper via API key |
 | `backtest_on_start` | bool | Run backtest when bot starts |
 | `backtest_capital` | number | Starting capital for backtest (USD) |

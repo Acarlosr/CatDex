@@ -309,6 +309,33 @@ class BotManager:
             return cost * float(price)
         return cost
 
+    @staticmethod
+    def _deployed_capital(db, bot_names, quote):
+        """Quote-currency cost (entry price x amount) of the open paper/live
+        positions of the given bots in pairs quoted in `quote`."""
+        if not bot_names:
+            return 0.0
+        rows = db.query(Position.entry_price, Position.amount, Position.symbol).filter(
+            Position.bot_name.in_(list(bot_names)), Position.status == "open",
+            Position.mode.in_(["paper", "live"])).all()
+        return sum((r[0] or 0.0) * (r[1] or 0.0) for r in rows if (r[2] or "").replace('-', '/').upper().endswith('/' + quote))
+
+    def _live_allocation(self, db, bot, quote, free_balance):
+        """Capital this bot may still deploy: its share (live_allocation_pct) of
+        the wallet's quote equity — free balance plus what every bot on the same
+        key already has in open positions — minus its own open positions.
+        Returns (pool_remaining, wallet_total, bot_total)."""
+        pct = min(max(_num(bot.settings.get("live_allocation_pct"), 100), 0.0), 100.0)
+        key_name = bot.settings.get("api_key_name")
+        peers = [b.name for b in db.query(BotConfig).all() if (b.settings or {}).get("api_key_name") == key_name]
+        if bot.name not in peers:
+            peers.append(bot.name)
+        deployed_key = self._deployed_capital(db, peers, quote)
+        deployed_bot = self._deployed_capital(db, [bot.name], quote)
+        wallet_total = free_balance + deployed_key
+        bot_total = wallet_total * pct / 100.0
+        return max(bot_total - deployed_bot, 0.0), wallet_total, bot_total
+
     def _get_live_capital(self, ccxt_inst, api_key_record, ccxt_symbol, bot_name, ttl=30):
         """Free quote-currency balance on the exchange, cached briefly to spare
         rate limits. Returns None when the balance cannot be determined so the
@@ -1221,6 +1248,41 @@ class BotManager:
                         db.commit()
                         return
 
+            # Wallet report for real modes: balances of every whitelist token,
+            # this bot's allocation and whether the key is over-allocated across
+            # bots. The first successful report also freezes live_starting_capital
+            # as the base for live drawdown / capital-loss percentages.
+            if live_mode in ("paper", "live"):
+                try:
+                    _ccxt = self._get_ccxt_instance(api_key)
+                    _bal = _ccxt.fetch_balance()
+                    _pairs = [str(s).replace('-', '/').upper() for s in symbols]
+                    _tokens = []
+                    for _p in _pairs:
+                        for _t in _p.split('/'):
+                            if _t not in _tokens:
+                                _tokens.append(_t)
+                    def _free(t):
+                        v = _bal.get(t)
+                        return float((v or {}).get("free") or 0) if isinstance(v, dict) else float((_bal.get("free") or {}).get(t) or 0)
+                    _parts = [f"{_free(t):,.4f}".rstrip('0').rstrip('.') + f" {t}" for t in _tokens]
+                    _quote = _pairs[0].split('/')[-1] if _pairs else "USDT"
+                    _pool, _wallet_total, _bot_total = self._live_allocation(db, bot, _quote, _free(_quote))
+                    _pct = _num(bot.settings.get("live_allocation_pct"), 100)
+                    blb.push(bot.name, "INFO", f"Wallet '{api_key.name}' ({live_mode}): {', '.join(_parts)} free — this bot: {_pct:.0f}% = {_bot_total:,.2f} {_quote} ({_pool:,.2f} still deployable)")
+                    _peer_pct = sum(_num((b.settings or {}).get("live_allocation_pct"), 100)
+                                    for b in db.query(BotConfig).filter(BotConfig.is_active == True).all()
+                                    if (b.settings or {}).get("api_key_name") == api_key.name and (b.settings or {}).get("api_execution"))
+                    if _peer_pct > 100.0:
+                        blb.push(bot.name, "WARN", f"Bots on key '{api_key.name}' allocate {_peer_pct:.0f}% of the wallet in total — entries will compete for the same funds")
+                    if not bot.settings.get("live_starting_capital") and _bot_total > 0:
+                        bot.settings = {**bot.settings, "live_starting_capital": round(_bot_total, 2)}
+                        db.commit()
+                        blb.push(bot.name, "INFO", f"Live starting capital set to {_bot_total:,.2f} {_quote} (base for drawdown / capital-loss %; cleared by a cache wipe)")
+                except Exception as _exc:
+                    logger.warning("Bot '%s': wallet report failed: %s", bot.name, _exc)
+                    blb.push(bot.name, "WARN", f"Could not read wallet balance: {_exc}")
+
             # Make the backtest→live handover visible in the console: the next
             # tick only arrives when the current candle closes on the exchange
             try:
@@ -1374,7 +1436,7 @@ class BotManager:
                     max_capital_loss_pct = _num(bot.settings.get("max_capital_loss"), 0)
                     dd_action = bot.settings.get("drawdown_action", "close_all")
                     if max_drawdown_pct > 0 or max_capital_loss_pct > 0:
-                        live_capital = _num(bot.settings.get("backtest_capital"), 1000)
+                        live_capital = _num(bot.settings.get("live_starting_capital"), 0) or _num(bot.settings.get("backtest_capital"), 1000)
                         _reset_raw = bot.settings.get("drawdown_peak_reset_at")
                         try:
                             _peak_reset_at = _naive_utc(datetime.fromisoformat(_reset_raw)) if _reset_raw else None
@@ -1555,22 +1617,27 @@ class BotManager:
                                         logger.info("%s BUY for %s @ %s already recorded, skipping duplicate entry", mode.upper(), symbol, latest_time)
                                         continue
 
-                                    # Size trades from the exchange balance, capped at the
-                                    # per-bot allocation (backtest_capital)
-                                    allocation = _num(bot.settings.get("backtest_capital"), 1000)
+                                    # Size trades from the wallet: this bot's share
+                                    # (live_allocation_pct) of the quote equity, minus
+                                    # what it already has deployed — same pool logic
+                                    # as the backtest's bt_equity
                                     free_balance = self._get_live_capital(ccxt_inst, api_key_record, ccxt_symbol, bot.name)
                                     if free_balance is None:
                                         if mode == "live":
                                             logger.warning("Skipping entry for %s: could not verify exchange balance", symbol)
                                             blb.push(bot.name, "WARN", "Skipping entry: could not verify exchange balance")
                                             continue
-                                        sizing_capital = allocation
-                                        logger.info("Bot '%s': sandbox balance unavailable, sizing paper entry from allocation $%.2f", bot.name, allocation)
+                                        sizing_capital = _num(bot.settings.get("backtest_capital"), 1000)
+                                        logger.info("Bot '%s': sandbox balance unavailable, sizing paper entry from backtest capital $%.2f", bot.name, sizing_capital)
                                     else:
-                                        sizing_capital = min(free_balance, allocation)
-                                        logger.info("Bot '%s': sizing %s entry from %s $%.2f (free=$%.2f, allocation=$%.2f)",
-                                            bot.name, mode, "free balance" if free_balance < allocation else "allocation",
-                                            sizing_capital, free_balance, allocation)
+                                        _quote = ccxt_symbol.split('/')[-1]
+                                        pool, wallet_total, bot_total = self._live_allocation(db, bot, _quote, free_balance)
+                                        if pool <= 0:
+                                            blb.push(bot.name, "WARN", f"BUY signal on {symbol} skipped — allocation fully deployed ({bot_total:,.0f} {_quote} = {_num(bot.settings.get('live_allocation_pct'), 100):.0f}% of wallet {wallet_total:,.0f})")
+                                            continue
+                                        sizing_capital = min(free_balance, pool)
+                                        logger.info("Bot '%s': sizing %s entry from $%.2f (free=$%.2f, pool remaining=$%.2f of allocation $%.2f, wallet=$%.2f)",
+                                            bot.name, mode, sizing_capital, free_balance, pool, bot_total, wallet_total)
                                     trade_amount = self._calculate_trade_amount(current_price, bot.settings, current_equity=sizing_capital)
                                     if trade_amount is None:
                                         logger.warning("Skipping buy for %s: no capital available to size trade", symbol)
@@ -1827,6 +1894,24 @@ class BotManager:
                     self.position_states.pop(pid, None)
         except Exception:
             pass
+
+    def reset_bot_state(self, bot_name: str):
+        """Drop every in-memory cache the engine keeps for a bot (cache wipe):
+        drawdown state, entry block, position states of positions that no
+        longer exist. Open real positions keep their state."""
+        self._drawdown_cache.pop((bot_name, "live"), None)
+        self._drawdown_cache.pop((bot_name, "backtest"), None)
+        self._entries_blocked.discard(bot_name)
+        self._balance_cache.clear()
+        try:
+            db = SessionLocal()
+            existing = {p.id for p in db.query(Position.id).all()}
+            db.close()
+            with self._position_states_lock:
+                for pid in [k for k in self.position_states if k not in existing]:
+                    self.position_states.pop(pid, None)  # position row is gone → stale state
+        except Exception as e:
+            logger.warning(f"reset_bot_state({bot_name}): could not prune position states: {e}")
 
     def unmark_deleted(self, bot_name: str):
         """Remove deletion marker after cleanup is complete."""

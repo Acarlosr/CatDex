@@ -501,6 +501,7 @@ Found a security vulnerability? Please **do not** open a public issue — follow
 - Ports bind to `127.0.0.1` by default; LAN access is an explicit opt-in (`BIND_ADDR=0.0.0.0`)
 - The backend container runs as a non-root user; `.env` is created with restrictive permissions and excluded from version control
 - Live order execution requires a `max_order_value` safety cap, sizes against the verified exchange balance, and reconciles every order fill (`fetch_order`) before booking
+- Live sizing is wallet-based: each bot deploys up to `live_allocation_pct` of the exchange wallet (free balance + positions already open on that key), so multiple bots can share one API key by splitting the percentage
 - Sandbox-flagged keys refuse to run on exchanges without a real testnet
 - Swagger/OpenAPI docs are disabled by default; a Content-Security-Policy is set on the web UI
 

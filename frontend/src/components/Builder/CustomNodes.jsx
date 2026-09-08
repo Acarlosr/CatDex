@@ -197,6 +197,11 @@ export const BotConfigNode = ({ id, data }) => (
         <span className="text-[9px] text-muted block mt-1">Safety guard: rejects live orders exceeding this USD value</span>
       </div>
       <div className="pt-2 border-t border-border">
+        <label className="text-[10px] text-muted font-bold uppercase mb-1.5 block">Live Allocation % of Wallet</label>
+        <input type="number" step="1" min="1" max="100" className="w-full bg-inset border border-border text-accent text-xs rounded-md p-2 nodrag focus:border-purple outline-none font-num text-center" value={data.liveAllocationPct !== undefined ? data.liveAllocationPct : 100} onChange={(e) => data.onChange(id, 'liveAllocationPct', e.target.value === "" ? "" : parseFloat(e.target.value))} />
+        <span className="text-[9px] text-muted block mt-1">Share of the exchange wallet (quote balance + open positions) this bot may deploy. Split it between bots that share one API key. Entry size % applies to what is still undeployed.</span>
+      </div>
+      <div className="pt-2 border-t border-border">
         <label className="text-[10px] text-muted font-bold uppercase mb-1.5 block">Live Execution Mode</label>
         <select className="w-full bg-inset border border-border text-text text-xs rounded-md p-2 nodrag focus:border-purple outline-none" value={data.executionMode !== undefined ? data.executionMode : "paper"} onChange={(e) => data.onChange(id, 'executionMode', e.target.value)}>
           <option value="paper">Paper Trading (Simulated Execution)</option>

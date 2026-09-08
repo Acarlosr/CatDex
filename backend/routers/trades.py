@@ -326,32 +326,27 @@ def _record_unfilled_close_order(db: Session, pos: Position, close_side: str, or
         logger.error("Failed to record unfilled close order %s for position %d: %s", order_id, pos.id, exc)
 
 
-@router.post("/positions/{position_id}/close")
-def force_close_position(position_id: int, db: Session = Depends(get_db)):
-    pos = db.query(Position).filter(Position.id == position_id).first()
-    if not pos:
-        return JSONResponse(status_code=404, content={"detail": "Position not found"})
-    if pos.status == "closed":
-        return JSONResponse(status_code=400, content={"detail": "Position is already closed."})
-
-    # Atomically mark as closed to prevent double-close race
+def close_position_now(pos: Position, db: Session) -> float:
+    """Force-close one open position and book the result. Real modes (live, and
+    paper = real orders on the exchange sandbox) are closed on the exchange;
+    forward_test at the last candle close. Raises HTTPException on failure and
+    leaves the position open. Shared by the force-close route and bot deletion."""
+    # Atomically mark as closing to prevent a double-close race with the engine
     rows_updated = db.query(Position).filter(
-        Position.id == position_id,
+        Position.id == pos.id,
         Position.status == "open"
     ).update({"status": "closing"}, synchronize_session="fetch")
-
     if rows_updated == 0:
-        return JSONResponse(status_code=400, content={"detail": "Position is already being closed."})
+        raise HTTPException(status_code=400, detail="Position is already being closed.")
 
     try:
-        # Refresh to get the updated state
         db.refresh(pos)
 
         exit_fee = 0.0
         exchange_order_id = None
         close_qty = pos.amount
 
-        if pos.mode == "live":
+        if pos.mode in ("live", "paper"):
             close_price, close_qty, exit_fee, exchange_order_id = _execute_live_close(pos, db)
         else:
             # Simulated modes: use the most recent candle close price
@@ -393,15 +388,28 @@ def force_close_position(position_id: int, db: Session = Depends(get_db)):
         db.add(close_order)
         db.commit()
         _invalidate_drawdown_cache([pos.bot_name])
-
-        return {"status": "success", "message": f"Position forcefully closed at ${close_price:.2f}"}
-    except HTTPException as e:
+        return float(close_price)
+    except HTTPException:
         db.rollback()
-        return JSONResponse(status_code=e.status_code, content={"detail": e.detail})
+        raise
     except Exception as e:
         db.rollback()
-        logger.error("Failed to force close position %d: %s", position_id, e)
-        return JSONResponse(status_code=500, content={"detail": "Failed to close position."})
+        logger.error("Failed to force close position %d: %s", pos.id, e)
+        raise HTTPException(status_code=500, detail="Failed to close position.")
+
+
+@router.post("/positions/{position_id}/close")
+def force_close_position(position_id: int, db: Session = Depends(get_db)):
+    pos = db.query(Position).filter(Position.id == position_id).first()
+    if not pos:
+        return JSONResponse(status_code=404, content={"detail": "Position not found"})
+    if pos.status == "closed":
+        return JSONResponse(status_code=400, content={"detail": "Position is already closed."})
+    try:
+        close_price = close_position_now(pos, db)
+    except HTTPException as e:
+        return JSONResponse(status_code=e.status_code, content={"detail": e.detail})
+    return {"status": "success", "message": f"Position forcefully closed at ${close_price:.2f}"}
 
 @router.get("/export")
 def export_trades_csv(mode: str = "live", db: Session = Depends(get_db)):

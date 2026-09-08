@@ -101,6 +101,8 @@ def get_bots_summary(db: Session = Depends(get_db)):
                 # Sizing fields for the Analytics capital-allocation panel
                 "max_positions": b.settings.get("max_positions", 1) if b.settings else 1,
                 "max_order_value": b.settings.get("max_order_value") if b.settings else None,
+                "live_allocation_pct": b.settings.get("live_allocation_pct", 100) if b.settings else 100,
+                "live_starting_capital": b.settings.get("live_starting_capital") if b.settings else None,
                 "entry_amount_type": (b.settings.get("trade_settings") or {}).get("entry", {}).get("amount_type", "percentage") if b.settings else "percentage",
                 "entry_amount_value": (b.settings.get("trade_settings") or {}).get("entry", {}).get("amount_value") if b.settings else None,
             },
@@ -337,13 +339,42 @@ def delete_bot(bot_id: int, background_tasks: BackgroundTasks, db: Session = Dep
         raise HTTPException(status_code=400, detail="Cannot delete a running bot. Stop it first.")
 
     bot_name = bot.name
+
+    # Real positions must not silently vanish from the books while they still
+    # exist on the exchange: close every open non-backtest position first (at
+    # market, even at a loss). Any failure aborts the delete with the bot intact.
+    from backend.routers.trades import close_position_now
+    open_real = db.query(Position).filter(
+        Position.bot_name == bot_name, Position.status == "open",
+        Position.mode.in_(["forward_test", "paper", "live"]),
+    ).all()
+    closed_now = 0
+    closed_real = 0
+    for pos in open_real:
+        try:
+            price = close_position_now(pos, db)
+            closed_now += 1
+            closed_real += pos.mode in ("paper", "live")
+            logger.warning("Bot '%s' delete: closed %s %s position #%d at %s", bot_name, pos.mode, pos.symbol, pos.id, price)
+        except HTTPException as e:
+            raise HTTPException(
+                status_code=e.status_code if e.status_code >= 500 else 409,
+                detail=f"Could not close open {pos.mode} position on {pos.symbol} (#{pos.id}): {e.detail} "
+                       f"Bot not deleted — {closed_now} of {len(open_real)} positions were closed.",
+            )
+
     bot_manager.mark_deleted(bot_name)
     db.delete(bot)
     db.commit()
 
     # Heavy cleanup (orders, positions, signals, logs) runs after response is sent
     background_tasks.add_task(_cleanup_bot_data, bot_name)
-    return {"message": f"Bot '{bot_name}' deleted.", "is_active": False}
+    msg = f"Bot '{bot_name}' deleted."
+    if closed_real:
+        msg += f" {closed_real} open position(s) closed on the exchange first."
+    elif closed_now:
+        msg += f" {closed_now} open forward-test position(s) closed first."
+    return {"message": msg, "is_active": False}
 
 async def _start(bot: BotConfig, db: Session):
     bot.is_active = True
@@ -488,12 +519,33 @@ def get_bot_logs(bot_name: str, since: int = Query(default=0)):
 
 @router.delete("/{bot_name}/cache")
 def clear_bot_cache(bot_name: str, db: Session = Depends(get_db)):
+    """Reset everything the engine derived for a bot so the next start is a
+    clean run: signals, console logs and in-memory caches always; simulated
+    trades (backtest + forward_test) too when the bot is stopped. Real (paper/
+    live) trades are never touched here."""
     try:
+        bot = db.query(BotConfig).filter(BotConfig.name == bot_name).first()
+        running = bool(bot and bot.is_active)
         result = db.execute(text("DELETE FROM signals WHERE bot_name = :bn"), {"bn": bot_name})
         deleted_signals = result.rowcount
+        deleted_sim = 0
+        if not running:
+            for mode in ("backtest", "forward_test"):
+                params = {"bn": bot_name, "mode": mode}
+                db.execute(text("DELETE FROM orders WHERE bot_name = :bn AND mode = :mode"), params)
+                deleted_sim += db.execute(text("DELETE FROM positions WHERE bot_name = :bn AND mode = :mode"), params).rowcount
+            if bot and bot.settings and any(k in bot.settings for k in ("last_backtest_summary", "last_backtest_max_drawdown", "last_stop_reason", "drawdown_peak_reset_at", "live_starting_capital")):
+                bot.settings = {k: v for k, v in bot.settings.items() if k not in ("last_backtest_summary", "last_backtest_max_drawdown", "last_stop_reason", "drawdown_peak_reset_at", "live_starting_capital")}
+                flag_modified(bot, "settings")
         db.commit()
         blb.clear(bot_name)
-        return {"status": "success", "message": f"Cache cleared. {deleted_signals} signals removed. Log buffer reset."}
+        bot_manager.reset_bot_state(bot_name)
+        msg = f"Cache cleared: {deleted_signals} signals removed, log buffer and engine caches reset."
+        if running:
+            msg += " Bot is running — simulated trades kept; stop it first for a full reset."
+        else:
+            msg += f" {deleted_sim} simulated (backtest/forward-test) positions removed."
+        return {"status": "success", "message": msg}
     except Exception as e:
         db.rollback()
         logger.error("Failed to clear cache for '%s': %s", bot_name, e)

@@ -323,7 +323,7 @@ const BotCard = memo(function BotCard({ bot, index, busyAction, togglingBot, ope
           </IconButton>
           <div className="w-px h-3.5 bg-border mx-1" />
           <IconButton
-            title="Reset signals & console logs (this also happens automatically when you edit or re-run a backtest)"
+            title="Reset bot: clear signals, console, backtest/forward-test trades and drawdown state (paper/live trades are kept)"
             tone="warn"
             disabled={bot.is_active || !!busyAction}
             onClick={() => handleClearCacheClick(bot)}
@@ -439,7 +439,7 @@ export default function BotManagerUI({ bots = [], refetchBots, backendOk = true 
     if (busyAction) return;
     const ok = await confirmDialog({
       title: 'Delete Algorithm',
-      message: `Deleting '${botName}' permanently removes its logic and configuration from the database. This cannot be undone.`,
+      message: `Deleting '${botName}' permanently removes its configuration, signals, trades and orders. Any open paper/live positions are market-closed on the exchange first — even at a loss. This cannot be undone.`,
       confirmText: 'Delete',
       type: 'danger',
     });
@@ -458,9 +458,9 @@ export default function BotManagerUI({ bots = [], refetchBots, backendOk = true 
   const handleClearCacheClick = useCallback(async (bot) => {
     if (busyAction) return;
     const ok = await confirmDialog({
-      title: 'Clear Chart Cache',
-      message: `Clear all drawn signals and indicator data for '${bot.name}' from the chart? Your trade ledger will remain intact.`,
-      confirmText: 'Clear Cache',
+      title: 'Reset Bot',
+      message: `Reset '${bot.name}' to a clean slate? This clears its signals, console logs, backtest and forward-test trades, drawdown state and the live-capital snapshot. Paper/live trades are kept. The next start runs a fresh backtest.`,
+      confirmText: 'Reset',
       type: 'warning',
     });
     if (!ok) return;
@@ -469,7 +469,7 @@ export default function BotManagerUI({ bots = [], refetchBots, backendOk = true 
       await apiClient.delete(`/api/bots/console/cache?bot_name=${encodeURIComponent(bot.name)}`);
       refetchBots();
       setClearSignals(prev => ({ ...prev, [bot.name]: (prev[bot.name] || 0) + 1 }));
-      toast.success(`Cache cleared for '${bot.name}'`);
+      toast.success(`'${bot.name}' reset — next start runs a fresh backtest`);
     } catch {
       toast.error('Failed to clear cache.');
     }
