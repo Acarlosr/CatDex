@@ -310,6 +310,8 @@ AI assistants can generate `.apex.json` files that users import directly into Ap
       "cooldown_trades": 0,
       "cooldown_candles": 0,
       "max_drawdown": 0,
+      "drawdown_action": "close_all",
+      "max_capital_loss": 0,
       "max_order_value": 0,
       "api_execution": false,
       "backtest_on_start": true,
@@ -338,7 +340,9 @@ AI assistants can generate `.apex.json` files that users import directly into Ap
 | `max_positions_scope` | `"per_pair"` or `"global"` | Position limit scope |
 | `cooldown_trades` | int | Max new entries per cooldown window (0 = off) |
 | `cooldown_candles` | int | Cooldown window size in candles |
-| `max_drawdown` | number | Auto-stop threshold in % (0 = off). Measured peak-to-trough on the mark-to-market equity curve (cash + open positions), evaluated after the backtest and after every closed live position. |
+| `max_drawdown` | number | Drawdown limit in % (0 = off). Measured peak-to-trough on the mark-to-market equity curve (cash + open positions), evaluated after the backtest and after every closed live position. What happens on breach is set by `drawdown_action`. |
+| `drawdown_action` | `"close_all"` (default) or `"block_entries"` | `close_all`: close every open position and stop the bot (a backtest breach prevents going live). `block_entries`: keep running, skip new entries until drawdown recovers below half the limit; exits, stop-losses and take-profits keep working. The backtest simulates the same rule. Does not cap losses on open positions — pair it with `max_capital_loss`. Optional; missing key = `close_all`. |
+| `max_capital_loss` | number | Hard stop in % of starting capital (0 = off): `(start_capital - equity) / start_capital`. Independent of `max_drawdown` and of `drawdown_action`; on breach all positions are closed and the bot stops. Required (> 0) for live bots that use `block_entries`. |
 | `max_order_value` | number | Max USD per live order (0 = off) |
 | `api_execution` | bool | `true` for live/paper via API key |
 | `backtest_on_start` | bool | Run backtest when bot starts |

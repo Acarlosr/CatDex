@@ -13,6 +13,7 @@ VALID_CLOSE_AMOUNT_TYPES = {'percentage', 'fixed'}
 VALID_CONDITION_OPS = {'>', '<', '>=', '<=', '==', '!=', 'cross_above', 'cross_below', 'increasing', 'decreasing', 'increasing_for', 'decreasing_for'}
 VALID_LOGIC_OPS = {'and', 'or', 'xor', 'nand', 'nor', 'not'}
 VALID_PRICE_TYPES = {'open', 'high', 'low', 'close', 'volume'}
+VALID_DRAWDOWN_ACTIONS = {'close_all', 'block_entries'}
 
 
 def validate_bot_settings(settings: dict, exchange_id: str | None = None) -> dict:
@@ -78,6 +79,29 @@ def validate_bot_settings(settings: dict, exchange_id: str | None = None) -> dic
     max_pos = settings.get("max_positions", 1)
     if isinstance(max_pos, (int, float)) and max_pos < 1:
         errors.append("max_positions must be >= 1.")
+
+    # Drawdown handling (both optional; missing keys keep the legacy behaviour)
+    dd_action = settings.get("drawdown_action", "close_all")
+    if dd_action not in VALID_DRAWDOWN_ACTIONS:
+        errors.append(f"Invalid drawdown_action '{dd_action}'. Use 'close_all' or 'block_entries'.")
+    try:
+        max_capital_loss = float(settings.get("max_capital_loss") or 0)
+        if max_capital_loss < 0 or max_capital_loss >= 100:
+            errors.append("max_capital_loss must be between 0 (off) and 100.")
+    except (ValueError, TypeError):
+        max_capital_loss = 0
+        errors.append(f"max_capital_loss '{settings.get('max_capital_loss')}' is not a valid number.")
+    if dd_action == "block_entries":
+        try:
+            _dd_limit = float(settings.get("max_drawdown") or 0)
+        except (ValueError, TypeError):
+            _dd_limit = 0
+        if _dd_limit <= 0:
+            warnings.append("drawdown_action is 'block_entries' but max_drawdown is 0 — it will never trigger.")
+        if settings.get("api_execution") and max_capital_loss <= 0:
+            # Blocking entries does not cap losses on positions that are still
+            # open, so a live bot needs the principal guard as its hard stop
+            errors.append("Live execution with drawdown_action 'block_entries' requires max_capital_loss > 0 as the hard stop.")
 
     # Validate each node
     for node_id, node in nodes.items():

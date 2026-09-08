@@ -85,6 +85,11 @@ class BotManager:
         # worker threads, so a threading lock (not asyncio) guards it
         self._position_states_lock = threading.Lock()
         self._drawdown_cache = {}  # (bot_name, mode_group) -> {peak_pnl, running_pnl, max_dd}
+        # Bots whose max_drawdown breached with drawdown_action=block_entries:
+        # no new entries until drawdown recovers below half the limit. Purely
+        # in-memory — re-derived from the drawdown cache on the first tick
+        # after a restart, so it survives without persistence.
+        self._entries_blocked = set()
         self._deleted_bots = set()  # bot names pending cleanup, skip in processing
         self._backfilling_bots = set()  # bot names currently in backfill, skip in live processing
         self._candle_locks = defaultdict(asyncio.Lock)  # (exchange, symbol, timeframe) -> serializer
@@ -173,6 +178,18 @@ class BotManager:
             s["peak_equity"] = max(s["peak_equity"], equity)
             if s["peak_equity"] > 0:
                 s["max_dd"] = max(s["max_dd"], ((s["peak_equity"] - equity) / s["peak_equity"]) * 100)
+
+    @staticmethod
+    def _dd_now(state):
+        """Current (not historical-max) drawdown % and capital-loss % from a
+        drawdown-cache state. Current drawdown recovers as equity climbs back,
+        which is what the block_entries hysteresis needs."""
+        equity = state["starting_capital"] + state["running_pnl"]
+        peak = state["peak_equity"]
+        dd = ((peak - equity) / peak) * 100 if peak > 0 else 0.0
+        start = state["starting_capital"]
+        loss = ((start - equity) / start) * 100 if start > 0 else 0.0
+        return max(dd, 0.0), max(loss, 0.0)
 
     async def start(self):
         self.running = True
@@ -685,6 +702,17 @@ class BotManager:
             bt_equity = bt_starting_capital  # Available cash (not locked in positions)
             bt_peak_equity = bt_starting_capital
             bt_max_dd = 0.0  # peak-to-trough on the mark-to-market equity curve
+            bt_max_loss = 0.0  # worst loss of principal vs. starting capital (%)
+            # Drawdown handling mirrors live: close_all (legacy) stops the bot
+            # after the backtest; block_entries pauses entries until recovery.
+            bt_dd_action = bot.settings.get("drawdown_action", "close_all")
+            bt_dd_limit = _num(bot.settings.get("max_drawdown"), 0)
+            bt_entries_blocked = False
+            bt_blocked_secs = 0.0
+            bt_prev_ts = None
+            # Detail for the post-backtest gate log (peak/trough of the worst dip)
+            bt_peak_ts = None
+            bt_dd_detail = {"peak_ts": None, "peak_eq": bt_starting_capital, "trough_ts": None, "trough_eq": bt_starting_capital, "open_at_trough": 0}
 
             # Fee and slippage for realistic backtest P&L
             bt_trade_settings = bot.settings.get("trade_settings", {})
@@ -931,8 +959,8 @@ class BotManager:
                         if len(recent_trades) >= cooldown_trades:
                             can_buy_cooldown = False
 
-                    # Capital depletion halt: no new entries, exits keep running
-                    if is_buy and not open_bt_pos and 1 <= max_pos and can_buy_cooldown and bt_equity > 0:
+                    # Capital depletion halt / drawdown block: no new entries, exits keep running
+                    if is_buy and not open_bt_pos and 1 <= max_pos and can_buy_cooldown and bt_equity > 0 and not bt_entries_blocked:
                         trade_amount = self._calculate_trade_amount(current_price, bot.settings, current_equity=bt_equity)
                         if trade_amount is not None:
                             bt_entry_price = current_price * (1 + bt_entry_slippage)
@@ -1017,9 +1045,32 @@ class BotManager:
                         if p2 is not None and c2["last_close"]:
                             open_value += p2.amount * c2["last_close"]
                     equity_now = bt_equity + open_value
-                    bt_peak_equity = max(bt_peak_equity, equity_now)
-                    if bt_peak_equity > 0:
-                        bt_max_dd = max(bt_max_dd, ((bt_peak_equity - equity_now) / bt_peak_equity) * 100)
+                    if equity_now > bt_peak_equity:
+                        bt_peak_equity = equity_now
+                        bt_peak_ts = ts
+                    dd_now = ((bt_peak_equity - equity_now) / bt_peak_equity) * 100 if bt_peak_equity > 0 else 0.0
+                    if dd_now > bt_max_dd:
+                        bt_max_dd = dd_now
+                        bt_dd_detail = {
+                            "peak_ts": bt_peak_ts, "peak_eq": bt_peak_equity,
+                            "trough_ts": ts, "trough_eq": equity_now,
+                            "open_at_trough": sum(1 for c2 in sym_contexts if c2["open_pos"] is not None),
+                        }
+                    if bt_starting_capital > 0:
+                        bt_max_loss = max(bt_max_loss, ((bt_starting_capital - equity_now) / bt_starting_capital) * 100)
+
+                    # block_entries: same rule as live — pause entries on breach,
+                    # resume once drawdown recovers below half the limit or the
+                    # bot is flat (with nothing open, realized equity can no
+                    # longer recover on its own — a permanent block would follow)
+                    if bt_dd_action == "block_entries" and bt_dd_limit > 0:
+                        if bt_entries_blocked and bt_prev_ts is not None:
+                            bt_blocked_secs += max(0.0, (ts - bt_prev_ts).total_seconds())
+                        if not bt_entries_blocked and dd_now >= bt_dd_limit and open_value > 0:
+                            bt_entries_blocked = True
+                        elif bt_entries_blocked and (dd_now < bt_dd_limit * 0.5 or open_value <= 0):
+                            bt_entries_blocked = False
+                    bt_prev_ts = ts
 
             # Close any trailing open backtest positions at the last available price.
             # Forward test / live must always start flat — a simulated entry must
@@ -1099,6 +1150,8 @@ class BotManager:
                         "win_rate": round(100.0 * wins / len(pnls), 1) if pnls else 0.0,
                         "return_pct": round(100.0 * sum(pnls) / bt_starting_capital, 2) if bt_starting_capital else 0.0,
                         "max_drawdown": round(bt_max_dd, 2),
+                        "max_capital_loss": round(bt_max_loss, 2),
+                        "entries_blocked_days": round(bt_blocked_secs / 86400, 1),
                         "candles": sum(len(c["df"]) for c in sym_contexts),
                         "finished_at": datetime.now(timezone.utc).isoformat(),
                     }
@@ -1109,11 +1162,30 @@ class BotManager:
                     db.rollback()
 
                 max_drawdown_pct = _num(bot.settings.get("max_drawdown"), 0)
-                if max_drawdown_pct > 0:
-                    self._drawdown_cache.pop((bot.name, "backtest"), None)
-                    if bt_max_dd >= max_drawdown_pct:
+                max_capital_loss_pct = _num(bot.settings.get("max_capital_loss"), 0)
+                self._drawdown_cache.pop((bot.name, "backtest"), None)
+
+                # Loss of principal is the hard stop regardless of drawdown_action
+                if max_capital_loss_pct > 0 and bt_max_loss >= max_capital_loss_pct:
+                    logger.warning("Bot '%s' backtest capital loss (%.2f%%) exceeds max (%.2f%%), stopping before live", bot.name, bt_max_loss, max_capital_loss_pct)
+                    blb.push(bot.name, "WARN", f"Backtest capital loss {bt_max_loss:.1f}% > {max_capital_loss_pct:.0f}% — bot stopped, not allowed to go live")
+                    self._engine_stop(bot, db, f"Backtest capital loss {bt_max_loss:.1f}% exceeded the {max_capital_loss_pct:.0f}% limit")
+                    db.commit()
+                    return
+
+                if max_drawdown_pct > 0 and bt_max_dd >= max_drawdown_pct:
+                    _d = bt_dd_detail
+                    _fmt = lambda t: t.strftime('%Y-%m-%d') if t is not None else '?'
+                    detail = (f"peak {_fmt(_d['peak_ts'])} ${_d['peak_eq']:,.0f} -> trough {_fmt(_d['trough_ts'])} "
+                              f"${_d['trough_eq']:,.0f}, {_d['open_at_trough']} open position(s)")
+                    if bt_dd_action == "block_entries":
+                        # Informative only: the same rule already paused entries
+                        # inside the simulation, so the numbers reflect it
+                        logger.warning("Bot '%s' backtest drawdown %.2f%% >= %.2f%% (block_entries) — going live with entries paused on breach", bot.name, bt_max_dd, max_drawdown_pct)
+                        blb.push(bot.name, "WARN", f"Backtest max drawdown {bt_max_dd:.1f}% ({detail}). Entries were blocked for {bt_blocked_secs / 86400:.0f} days — bot continues, new entries pause on breach.")
+                    else:
                         logger.warning("Bot '%s' backtest drawdown (%.2f%%) exceeds max (%.2f%%), stopping before live", bot.name, bt_max_dd, max_drawdown_pct)
-                        blb.push(bot.name, "WARN", f"Backtest max drawdown {bt_max_dd:.2f}% >= {max_drawdown_pct:.2f}%, bot stopped — not allowed to go live")
+                        blb.push(bot.name, "WARN", f"Backtest max drawdown {bt_max_dd:.1f}% >= {max_drawdown_pct:.0f}% ({detail}), bot stopped — not allowed to go live")
                         self._engine_stop(bot, db, f"Backtest drawdown {bt_max_dd:.1f}% exceeded the {max_drawdown_pct:.0f}% limit")
                         db.commit()
                         return
@@ -1262,21 +1334,56 @@ class BotManager:
                     if bot.name in self._deleted_bots or bot.name in self._backfilling_bots:
                         continue
 
-                    # Max drawdown guard: auto-stop bot if live drawdown exceeds threshold
+                    # Risk guards on the realized live equity curve:
+                    #  - max_capital_loss: loss of principal → close all + stop (any action)
+                    #  - max_drawdown + close_all (default): close all + stop
+                    #  - max_drawdown + block_entries: pause entries, keep exits,
+                    #    resume below half the limit (hysteresis)
                     max_drawdown_pct = _num(bot.settings.get("max_drawdown"), 0)
-                    if max_drawdown_pct > 0:
+                    max_capital_loss_pct = _num(bot.settings.get("max_capital_loss"), 0)
+                    dd_action = bot.settings.get("drawdown_action", "close_all")
+                    if max_drawdown_pct > 0 or max_capital_loss_pct > 0:
                         live_capital = _num(bot.settings.get("backtest_capital"), 1000)
                         dd_state = self._get_drawdown(bot.name, db, mode_group="live", starting_capital=live_capital)
-                        if dd_state["max_dd"] >= max_drawdown_pct:
-                            logger.warning("Bot '%s' hit max drawdown (%.2f%% >= %.2f%%), auto-stopping", bot.name, dd_state["max_dd"], max_drawdown_pct)
+                        dd_now, loss_now = self._dd_now(dd_state)
+
+                        stop_reason = None
+                        if max_capital_loss_pct > 0 and loss_now >= max_capital_loss_pct:
+                            blb.push(bot.name, "WARN", f"Capital loss {loss_now:.1f}% > {max_capital_loss_pct:.0f}% — bot stopped")
+                            stop_reason = f"Capital loss {loss_now:.1f}% hit the {max_capital_loss_pct:.0f}% limit — positions closed"
+                        elif max_drawdown_pct > 0 and dd_action != "block_entries" and dd_state["max_dd"] >= max_drawdown_pct:
                             blb.push(bot.name, "WARN", f"Max drawdown hit ({dd_state['max_dd']:.2f}% >= {max_drawdown_pct:.2f}%), auto-stopping")
+                            stop_reason = f"Live drawdown {dd_state['max_dd']:.1f}% hit the {max_drawdown_pct:.0f}% limit — positions closed"
+
+                        if stop_reason:
+                            logger.warning("Bot '%s': %s", bot.name, stop_reason)
                             blb.push(bot.name, "WARN", "Closing all open positions before stopping — a stopped bot no longer manages SL/TP")
                             self._close_all_open_positions(bot, db, key_records)
-                            self._engine_stop(bot, db, f"Live drawdown {dd_state['max_dd']:.1f}% hit the {max_drawdown_pct:.0f}% limit — positions closed")
+                            self._engine_stop(bot, db, stop_reason)
                             self._drawdown_cache.pop((bot.name, "live"), None)
                             self._drawdown_cache.pop((bot.name, "backtest"), None)
+                            self._entries_blocked.discard(bot.name)
                             db.commit()
                             continue
+
+                        if max_drawdown_pct > 0 and dd_action == "block_entries":
+                            # The block protects open positions from being added to
+                            # during a dip. A flat bot is never blocked: realized
+                            # equity cannot recover without trades, so it would stay
+                            # blocked forever (the capital-loss guard is the hard stop).
+                            _open_any = sum(len(v) for k, v in _positions_by_bot_mode.items() if k[0] == bot.name and k[1] != "backtest")
+                            if bot.name not in self._entries_blocked and dd_now >= max_drawdown_pct and _open_any > 0:
+                                self._entries_blocked.add(bot.name)
+                                logger.warning("Bot '%s' drawdown %.2f%% > %.2f%% — new entries blocked", bot.name, dd_now, max_drawdown_pct)
+                                blb.push(bot.name, "WARN", f"Max drawdown {dd_now:.1f}% > {max_drawdown_pct:.0f}% — new entries blocked (open positions keep their exits)")
+                            elif bot.name in self._entries_blocked:
+                                if dd_now < max_drawdown_pct * 0.5:
+                                    self._entries_blocked.discard(bot.name)
+                                    blb.push(bot.name, "INFO", f"Drawdown recovered to {dd_now:.1f}% — new entries allowed again")
+                                elif _open_any == 0:
+                                    self._entries_blocked.discard(bot.name)
+                                    blb.push(bot.name, "INFO", f"All positions closed at {dd_now:.1f}% drawdown — new entries allowed again (capital-loss guard remains)")
+                    entries_blocked = bot.name in self._entries_blocked
 
                     # Reuse indicator computation across bots with identical indicator configs
                     fp = _indicator_fingerprint(bot.settings)
@@ -1363,7 +1470,9 @@ class BotManager:
                         if recent_buys >= cooldown_trades:
                             can_buy_cooldown = False
 
-                    if is_buy and open_count < max_pos and can_buy_cooldown:
+                    if is_buy and entries_blocked:
+                        blb.push(bot.name, "INFO", f"BUY signal on {symbol} skipped — entries blocked by max drawdown")
+                    elif is_buy and open_count < max_pos and can_buy_cooldown:
                         trade_amount = self._calculate_trade_amount(current_price, bot.settings)
                         if trade_amount is None:
                             logger.warning("Skipping buy for %s: invalid trade amount", symbol)

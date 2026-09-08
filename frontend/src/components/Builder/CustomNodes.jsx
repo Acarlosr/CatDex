@@ -169,7 +169,20 @@ export const BotConfigNode = ({ id, data }) => (
       <div className="pt-2 border-t border-border">
         <label className="text-[10px] text-muted font-bold uppercase mb-1.5 block">Max Drawdown % (0 = Off)</label>
         <input type="number" step="0.1" className="w-full bg-inset border border-border text-accent text-xs rounded-md p-2 nodrag focus:border-purple outline-none font-num text-center" value={data.maxDrawdown !== undefined ? data.maxDrawdown : 0} onChange={(e) => data.onChange(id, 'maxDrawdown', e.target.value === "" ? "" : parseFloat(e.target.value))} />
-        <span className="text-[9px] text-muted block mt-1">Auto-stops bot if cumulative drawdown exceeds this %</span>
+        <span className="text-[9px] text-muted block mt-1">Peak-to-trough on the equity curve, checked after the backtest and after every closed trade</span>
+      </div>
+      <div className="pt-2 border-t border-border">
+        <label className="text-[10px] text-muted font-bold uppercase mb-1.5 block">On Max Drawdown</label>
+        <select className="w-full bg-inset border border-border text-accent text-xs rounded-md p-2 nodrag focus:border-purple outline-none" value={data.drawdownAction || 'close_all'} onChange={(e) => data.onChange(id, 'drawdownAction', e.target.value)}>
+          <option value="close_all">Close all & stop (default)</option>
+          <option value="block_entries">Block new entries, keep exits</option>
+        </select>
+        <span className="text-[9px] text-muted block mt-1">{(data.drawdownAction || 'close_all') === 'block_entries' ? 'Entries pause until drawdown recovers below half the limit. Does not cap losses — set Max Capital Loss.' : 'Closes every open position and stops the bot'}</span>
+      </div>
+      <div className="pt-2 border-t border-border">
+        <label className="text-[10px] text-muted font-bold uppercase mb-1.5 block">Max Capital Loss % (0 = Off)</label>
+        <input type="number" step="0.1" min="0" max="99" className="w-full bg-inset border border-border text-accent text-xs rounded-md p-2 nodrag focus:border-purple outline-none font-num text-center" value={data.maxCapitalLoss !== undefined ? data.maxCapitalLoss : 0} onChange={(e) => data.onChange(id, 'maxCapitalLoss', e.target.value === "" ? "" : parseFloat(e.target.value))} />
+        <span className="text-[9px] text-muted block mt-1">Hard stop: loss of starting capital, independent of drawdown. Required for live bots that block entries.</span>
       </div>
       <div className="pt-2 border-t border-border">
         <label className="text-[10px] text-muted font-bold uppercase mb-1.5 block">Max Order Value USD (0 = Off)</label>

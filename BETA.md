@@ -75,7 +75,7 @@ The repo contains `STRATEGY_CONTEXT.md`. Paste that file into any capable AI ass
 - Add your exchange key under **Settings** (it is encrypted at rest).
 - In the bot: enable API execution and link the key.
 - **`Max order value` is mandatory for live bots** — the app refuses to start a live bot without this hard cap per order. Set it low.
-- Set **Max drawdown** (e.g. 10–15%): the bot then automatically closes its positions and stops if losses exceed your limit.
+- Set **Max drawdown** (e.g. 10–15%): by default the bot then automatically closes its positions and stops if the equity curve drops that far from its peak. You can switch **On max drawdown** to *Block new entries* instead (exits keep working, no forced liquidation) — if you do, also set **Max capital loss %** as the hard stop, since blocking entries alone does not cap losses on open positions.
 - Fill in your exchange's real **fee** (e.g. 0.1%) in the trade settings — backtests without fees are misleadingly optimistic.
 - After any backend restart, compare the bot's open positions in the UI with your exchange account before letting it continue.
 

@@ -44,6 +44,9 @@ const MODE_BADGE_VARIANT = {
 // ─── Equity Curve SVG ────────────────────────────────────────────────────────
 
 const EquityCurve = ({ data }) => {
+    // Hovered point index (null = none). Hooks must run before the early return.
+    const [hover, setHover] = useState(null);
+    const wrapRef = useRef(null);
     if (data.length < 2) {
         return (
             <div className="flex flex-col items-center justify-center h-full space-y-2 text-center">
@@ -86,7 +89,21 @@ const EquityCurve = ({ data }) => {
     const firstDate = data[0].date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     const lastDate = data[data.length - 1].date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 
+    // Map mouse x (in CSS px) to the nearest data index; the SVG is stretched
+    // with preserveAspectRatio="none", so scale by the wrapper width.
+    const onMove = (e) => {
+        const rect = wrapRef.current?.getBoundingClientRect();
+        if (!rect || rect.width === 0) return;
+        const vx = ((e.clientX - rect.left) / rect.width) * W;
+        const idx = Math.round(((vx - PAD.l) / iW) * (data.length - 1));
+        setHover(Math.max(0, Math.min(data.length - 1, idx)));
+    };
+    const hp = hover !== null ? data[hover] : null;
+    const hoverPct = hp ? (xS(hover) / W) * 100 : 0;
+    const flipTip = hoverPct > 60;
+
     return (
+        <div ref={wrapRef} className="relative w-full h-full" onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
         <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-full" preserveAspectRatio="none">
             <defs>
                 <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
@@ -106,7 +123,33 @@ const EquityCurve = ({ data }) => {
             {/* Date labels */}
             <text x={PAD.l} y={H - 4} style={{ fill: 'var(--color-muted)' }} fontSize="10" fontFamily="JetBrains Mono, monospace">{firstDate}</text>
             <text x={W - PAD.r} y={H - 4} style={{ fill: 'var(--color-muted)' }} fontSize="10" fontFamily="JetBrains Mono, monospace" textAnchor="end">{lastDate}</text>
+            {/* Crosshair */}
+            {hp && (
+                <>
+                    <line x1={xS(hover)} y1={PAD.t} x2={xS(hover)} y2={H - PAD.b}
+                        style={{ stroke: 'var(--color-muted)' }} strokeWidth="1" strokeDasharray="2,3" vectorEffect="non-scaling-stroke" />
+                    <circle cx={xS(hover)} cy={yS(hp.value)} r="3.5" style={{ fill: 'var(--color-bg)', stroke: lineClr }} strokeWidth="2" vectorEffect="non-scaling-stroke" />
+                </>
+            )}
         </svg>
+        {hp && (
+            <div className={`absolute top-1 pointer-events-none z-10 bg-surface border border-border rounded-md shadow-lg px-3 py-2 text-[10px] font-num whitespace-nowrap ${flipTip ? '-translate-x-full' : ''}`}
+                style={{ left: `calc(${hoverPct}% ${flipTip ? '- 10px' : '+ 10px'})` }}>
+                <div className="text-muted mb-1">{hp.date.toLocaleString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })} <span className="text-faint">· trade #{hp.index}</span></div>
+                <div className="grid grid-cols-[auto_auto] gap-x-4 gap-y-0.5">
+                    <span className="text-muted">Equity</span><span className="text-text font-bold text-right">${safeNum(hp.equity)}</span>
+                    <span className="text-muted">Cumulative PNL</span><span className={`font-bold text-right ${pnlColor(hp.value)}`}>{pnlSign(hp.value)}${safeNum(Math.abs(hp.value))} <span className="text-faint font-normal">({pnlSign(hp.value)}{safeNum(hp.capital > 0 ? (hp.value / hp.capital) * 100 : 0, 1)}%)</span></span>
+                    <span className="text-muted">Peak</span><span className="text-text text-right">${safeNum(hp.peak)}</span>
+                    <span className="text-muted">Drawdown</span><span className={`text-right ${hp.drawdownPct > 0 ? 'text-danger' : 'text-faint'}`}>{hp.drawdownPct > 0 ? `-${safeNum(hp.drawdownPct, 1)}%` : '0%'}</span>
+                </div>
+                <div className="mt-1.5 pt-1.5 border-t border-border/60 text-muted">
+                    <span className="text-text">{hp.trade.symbol}</span> · {hp.trade.bot}
+                    <span className={`ml-2 font-bold ${pnlColor(hp.trade.pnl)}`}>{pnlSign(hp.trade.pnl)}${safeNum(Math.abs(hp.trade.pnl))}</span>
+                    <span className={`ml-1 ${pnlColor(hp.trade.pct)}`}>({pnlSign(hp.trade.pct)}{safeNum(hp.trade.pct, 2)}%)</span>
+                </div>
+            </div>
+        )}
+        </div>
     );
 };
 
@@ -684,14 +727,24 @@ export default function TradeManager({ setError, bots = [] }) {
 
     const equityCurveData = useMemo(() => {
         const sorted = [...closedPositions].sort((a, b) => new Date(a.closed_at) - new Date(b.closed_at));
+        // Starting equity = sum of the pools of the bots in view (same rule as the stats grid)
+        const names = [...new Set(sorted.map(p => p.bot_name).filter(Boolean))];
+        const capital = names.reduce((a, n) => a + (bots.find(b => b.name === n)?.settings?.backtest_capital || 1000), 0);
         const result = [];
-        let cum = 0;
+        let cum = 0, peak = capital;
         for (const p of sorted) {
             cum += (p.profit_abs || 0);
-            result.push({ date: new Date(p.closed_at), value: cum });
+            const equity = capital + cum;
+            if (equity > peak) peak = equity;
+            result.push({
+                date: new Date(p.closed_at), value: cum, equity, capital, peak,
+                drawdownPct: peak > 0 ? ((peak - equity) / peak) * 100 : 0,
+                trade: { bot: p.bot_name, symbol: p.symbol, pnl: p.profit_abs || 0, pct: p.profit_pct || 0, mode: p.mode },
+                index: result.length + 1,
+            });
         }
         return result;
-    }, [closedPositions]);
+    }, [closedPositions, bots]);
 
     // ── Buy & Hold comparison ─────────────────────────────────────────────────
 
@@ -958,11 +1011,19 @@ export default function TradeManager({ setError, bots = [] }) {
                                     Break-even
                                 </span>
                             </div>
-                            {equityCurveData.length >= 2 && (
-                                <span className={`text-sm font-num font-bold ${pnlColor(equityCurveData[equityCurveData.length - 1].value)}`}>
-                                    {pnlSign(equityCurveData[equityCurveData.length - 1].value)}${safeNum(Math.abs(equityCurveData[equityCurveData.length - 1].value))}
-                                </span>
-                            )}
+                            {equityCurveData.length >= 2 && (() => {
+                                const last = equityCurveData[equityCurveData.length - 1];
+                                return (
+                                    <span className="text-right leading-tight">
+                                        <span className={`block text-sm font-num font-bold ${pnlColor(last.value)}`}>
+                                            {pnlSign(last.value)}${safeNum(Math.abs(last.value))}
+                                        </span>
+                                        <span className="block text-[9px] font-num text-muted">
+                                            ${safeNum(last.capital, 0)} → <span className="text-text">${safeNum(last.equity, 0)}</span>
+                                        </span>
+                                    </span>
+                                );
+                            })()}
                         </div>
                     </div>
                     <div className="h-[160px] w-full">
