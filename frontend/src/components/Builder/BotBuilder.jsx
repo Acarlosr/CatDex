@@ -3,6 +3,7 @@ import ReactFlow, { MiniMap, Controls, Background, useNodesState, useEdgesState,
 import 'reactflow/dist/style.css';
 import { BotConfigNode, WhitelistNode, BacktestNode, ApiKeyNode, IndicatorNode, ConditionNode, LogicNode, StopLossNode, TakeProfitNode, ActionNode, PriceDataNode } from './CustomNodes';
 import { apiClient } from '../../api/client';
+import { loadIndicators } from './indicatorConfig';
 import { humanizeApiError } from '../../api/errors';
 import { getToken } from '../../theme';
 import Button from '../ui/Button';
@@ -257,6 +258,10 @@ const BotBuilderFlow = ({ closeBuilder, editingBot }) => {
       setNodes((nds) => nds.filter((n) => n.id !== id));
       setEdges((eds) => eds.filter((e) => e.source !== id && e.target !== id));
   }, [setNodes, setEdges]);
+
+  // Prefetch the indicator palette so nodes render fully on first paint.
+  // Errors surface inside IndicatorNode; nothing to do here.
+  useEffect(() => { loadIndicators().catch(() => {}); }, []);
 
   useEffect(() => {
     if (initRef.current) return;

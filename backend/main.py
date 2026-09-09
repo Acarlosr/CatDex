@@ -27,7 +27,7 @@ from backend.models.bots import BotConfig
 from backend.models.bot_logs import BotLog
 
 # Import the routers
-from backend.routers import auth, keys, data, bots, trades
+from backend.routers import auth, keys, data, bots, trades, indicators
 # Import the background services
 from backend.engine.candle_poller import candle_poller
 from backend.engine.bot_manager import bot_manager
@@ -80,6 +80,7 @@ app.include_router(keys.router)
 app.include_router(data.router)
 app.include_router(bots.router)
 app.include_router(trades.router)
+app.include_router(indicators.router)
 
 
 @app.get("/health")

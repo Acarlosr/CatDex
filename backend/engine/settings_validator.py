@@ -2,7 +2,7 @@ import logging
 import re
 
 from backend.core.exchange_registry import get_exchange_timeframes
-from backend.engine.evaluator import ALLOWED_INDICATOR_METHODS
+from backend.engine.indicator_registry import get_spec
 
 logger = logging.getLogger("apexalgo.settings_validator")
 SYMBOL_PATTERN = re.compile(r'^[A-Z0-9]+/[A-Z0-9]+$')
@@ -115,8 +115,25 @@ def validate_bot_settings(settings: dict, exchange_id: str | None = None) -> dic
 
         if node_class == "indicator":
             method = str(node.get("method", "")).lower()
-            if method and method not in ALLOWED_INDICATOR_METHODS:
+            spec = get_spec(method) if method else None
+            if method and spec is None:
                 errors.append(f"Node '{node_id}': indicator method '{method}' is not supported.")
+            elif spec is not None:
+                params = node.get("params")
+                if isinstance(params, dict):
+                    known = {p.id for p in spec.params}
+                    for pid in params:
+                        if pid not in known:
+                            warnings.append(f"Node '{node_id}': '{method}' has no parameter '{pid}' (ignored by pandas_ta or falls back to defaults).")
+                try:
+                    out_idx = int(node.get("output_idx", 0))
+                except (ValueError, TypeError):
+                    errors.append(f"Node '{node_id}': output_idx '{node.get('output_idx')}' is not a valid integer.")
+                else:
+                    if out_idx < 0 or out_idx >= len(spec.outputs):
+                        errors.append(f"Node '{node_id}': '{method}' has {len(spec.outputs)} output(s); output_idx {out_idx} is out of range.")
+                    elif out_idx in spec.disabled_outputs:
+                        errors.append(f"Node '{node_id}': '{method}' output '{spec.outputs[out_idx]}' is a look-ahead value and cannot be used.")
 
         elif node_class == "price_data":
             price_type = node.get("type", "close")

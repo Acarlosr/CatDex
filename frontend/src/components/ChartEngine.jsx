@@ -2,7 +2,7 @@ import { useEffect, useState, useRef, useMemo, useCallback, memo } from 'react';
 import { createChart, CandlestickSeries, HistogramSeries, LineSeries, createSeriesMarkers } from 'lightweight-charts';
 import { apiClient } from '../api/client';
 import { humanizeApiError } from '../api/errors';
-import { INDICATOR_SCALE_MAP } from './Builder/indicatorConfig';
+import { useIndicators, getIndicatorPane } from './Builder/indicatorConfig';
 import { getToken } from '../theme';
 import Button from './ui/Button';
 import Badge from './ui/Badge';
@@ -67,6 +67,7 @@ function ChartEngine({ dataset, openDataVault }) {
   const lastDbTimeRef = useRef(null);   // newest CLOSED candle time from the DB
   const formingCandleRef = useRef(null); // synthetic in-progress bar (ticker-fed)
    
+  const { registry: indicatorRegistry } = useIndicators();
   const [candleTimes, setCandleTimes] = useState([]); 
   const [loading, setLoading] = useState(true); 
   const [errorMsg, setErrorMsg] = useState(null); 
@@ -535,9 +536,11 @@ function ChartEngine({ dataset, openDataVault }) {
 
             if (isActive) {
                 if (!indicatorSeriesRef.current[seriesId]) {
-                    // Extract base method name (e.g., "RSI" from "RSI_14") for scale lookup
-                    const baseName = indKey.split('_')[0].toUpperCase();
-                    const scale = INDICATOR_SCALE_MAP[baseName] || 'oscillator';
+                    // Pane comes from the backend registry; wait for it so the
+                    // series is created on the right price scale the first time.
+                    if (!indicatorRegistry) return;
+                    // Node ids are "<method>_<n>" (e.g. "RSI_14"); look the method up.
+                    const scale = getIndicatorPane(indKey.split('_')[0]) || 'oscillator';
                     let scaleId = 'left'; // default: oscillator pane
                     if (scale === 'overlay') scaleId = 'right';
                     else if (scale === 'volume') scaleId = '';
@@ -574,7 +577,7 @@ function ChartEngine({ dataset, openDataVault }) {
             } 
         }); 
     }); 
-  }, [signals, orders, positions, botConfigs, getSnappedTime, snappedTradeMap, candleTimes, snappedSignalMap]); 
+  }, [signals, orders, positions, botConfigs, getSnappedTime, snappedTradeMap, candleTimes, snappedSignalMap, indicatorRegistry]); 
 
   const toggleBotSetting = (botName, settingKey) => {
       setBotConfigs(prev => ({

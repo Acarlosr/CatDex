@@ -1,28 +1,17 @@
 import logging
+
+import numpy as np
 import pandas as pd
 import pandas_ta_classic as ta
-import numpy as np
+
+from backend.engine.indicator_registry import (
+    SOURCE_ICHIMOKU,
+    SOURCE_VOLUME,
+    SOURCE_VOLUME_SMA,
+    get_spec,
+)
 
 logger = logging.getLogger("apexalgo.evaluator")
-
-# Indicator methods the strategy builder exposes. Anything else in a node
-# graph (e.g. a hand-edited import) is rejected instead of reflected onto
-# the pandas_ta accessor.
-ALLOWED_INDICATOR_METHODS = frozenset({
-    # Trend & overlap
-    "sma", "ema", "wma", "dema", "tema", "kama", "linreg", "midpoint",
-    "supertrend", "macd", "adx", "psar", "ichimoku",
-    # Momentum
-    "rsi", "stoch", "stochrsi", "cci", "mfi", "willr", "roc", "mom",
-    "tsi", "uo", "ao", "ppo", "fisher", "cmo",
-    # Volatility
-    "bbands", "atr", "natr", "kc", "donchian", "accbands", "massi",
-    # Volume
-    "volume", "vma", "obv", "vwap", "cmf", "ad", "adosc", "eom", "pvt",
-    # Statistics
-    "variance", "stdev", "zscore", "slope", "entropy", "kurtosis",
-    "skew", "log_return",
-})
 
 class NodeEvaluator:
     def __init__(self, settings: dict):
@@ -42,22 +31,23 @@ class NodeEvaluator:
                 params = node.get("params", {})
                 out_idx = int(node.get("output_idx", 0))
 
-                if method not in ALLOWED_INDICATOR_METHODS:
+                spec = get_spec(method)
+                if spec is None:
                     logger.warning("Node '%s': indicator method '%s' is not supported, skipping.", node_id, method)
                     self.df[node_id] = np.nan
                     continue
 
-                if method == "volume":
+                if spec.source == SOURCE_VOLUME:
                     self.df[node_id] = self.df['volume'] if 'volume' in self.df.columns else np.nan
                     continue
-                elif method == "vma":
+                elif spec.source == SOURCE_VOLUME_SMA:
                     if 'volume' in self.df.columns:
                         length = params.get('length', 14) if isinstance(params, dict) else 14
                         self.df[node_id] = ta.sma(self.df['volume'], length=length)
                     else:
                         self.df[node_id] = np.nan
                     continue
-                elif method == "ichimoku":
+                elif spec.source == SOURCE_ICHIMOKU:
                     try:
                         p = params if isinstance(params, dict) else {}
                         result = self.df.ta.ichimoku(

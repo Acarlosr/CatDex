@@ -1,5 +1,6 @@
 import React from 'react';
 import { Handle, Position } from 'reactflow';
+import { useIndicators } from './indicatorConfig';
 
 // All known timeframes with display labels
 const ALL_TIMEFRAMES = [
@@ -17,101 +18,6 @@ const ALL_TIMEFRAMES = [
   { value: '1w', label: '1 Week' },
   { value: '1M', label: '1 Month' },
 ];
-
-// ==========================================
-// 1. INDICATOR DEFINITIONS
-// scale: "overlay" = on price chart, "oscillator" = separate pane (0-100 or centered), "volume" = volume pane
-// ==========================================
-const INDICATOR_GROUPS = {
-    "Trend & Overlap": {
-        sma: { name: "SMA (Simple Moving Avg)", scale: "overlay", lines: ["Main"], params: [{id: "length", label: "Length", default: 14}] },
-        ema: { name: "EMA (Exponential Moving Avg)", scale: "overlay", lines: ["Main"], params: [{id: "length", label: "Length", default: 14}] },
-        wma: { name: "WMA (Weighted Moving Avg)", scale: "overlay", lines: ["Main"], params: [{id: "length", label: "Length", default: 14}] },
-        dema: { name: "DEMA (Double EMA)", scale: "overlay", lines: ["Main"], params: [{id: "length", label: "Length", default: 14}] },
-        tema: { name: "TEMA (Triple EMA)", scale: "overlay", lines: ["Main"], params: [{id: "length", label: "Length", default: 14}] },
-        kama: { name: "KAMA (Kaufman Adaptive MA)", scale: "overlay", lines: ["Main"], params: [{id: "length", label: "Length", default: 10}, {id: "fast", label: "Fast SC", default: 2}, {id: "slow", label: "Slow SC", default: 30}] },
-        linreg: { name: "Linear Regression", scale: "overlay", lines: ["Main"], params: [{id: "length", label: "Length", default: 14}] },
-        midpoint: { name: "Midpoint (HL/2)", scale: "overlay", lines: ["Main"], params: [{id: "length", label: "Length", default: 14}] },
-        supertrend: { name: "Supertrend", scale: "overlay", lines: ["Trend", "Direction", "Long", "Short"], params: [{id: "length", label: "ATR Length", default: 10}, {id: "multiplier", label: "Multiplier", default: 3.0}] },
-        macd: { name: "MACD", scale: "oscillator", lines: ["MACD Line", "Histogram", "Signal Line"], params: [
-            {id: "fast", label: "Fast Length", default: 12},
-            {id: "slow", label: "Slow Length", default: 26},
-            {id: "signal", label: "Signal Length", default: 9}
-        ]},
-        adx: { name: "ADX (Average Directional Index)", scale: "oscillator", lines: ["ADX", "DMP (+DI)", "DMN (-DI)"], params: [{id: "length", label: "Length", default: 14}] },
-        psar: { name: "Parabolic SAR", scale: "overlay", lines: ["Long", "Short", "AF", "Reversal"], params: [{id: "af0", label: "AF Step", default: 0.02}, {id: "af", label: "AF Max", default: 0.2}] },
-        ichimoku: { name: "Ichimoku Cloud", scale: "overlay", lines: ["Conversion (Tenkan)", "Base (Kijun)", "Span A", "Span B", "Chikou"], params: [{id: "tenkan", label: "Tenkan", default: 9}, {id: "kijun", label: "Kijun", default: 26}, {id: "senkou", label: "Senkou", default: 52}] },
-    },
-    "Momentum": {
-        rsi: { name: "RSI (Relative Strength Index)", scale: "oscillator", lines: ["Main"], params: [{id: "length", label: "Length", default: 14}] },
-        stoch: { name: "Stochastic Oscillator", scale: "oscillator", lines: ["%K", "%D"], params: [
-            {id: "k", label: "%K Length", default: 14},
-            {id: "d", label: "%D Length", default: 3},
-            {id: "smooth_k", label: "Smooth %K", default: 3}
-        ]},
-        stochrsi: { name: "Stochastic RSI", scale: "oscillator", lines: ["%K", "%D"], params: [
-            {id: "length", label: "RSI Length", default: 14},
-            {id: "rsi_length", label: "Stoch Length", default: 14},
-            {id: "k", label: "%K", default: 3},
-            {id: "d", label: "%D", default: 3}
-        ]},
-        cci: { name: "CCI (Commodity Channel Index)", scale: "oscillator", lines: ["Main"], params: [{id: "length", label: "Length", default: 14}] },
-        mfi: { name: "MFI (Money Flow Index)", scale: "oscillator", lines: ["Main"], params: [{id: "length", label: "Length", default: 14}] },
-        willr: { name: "Williams %R", scale: "oscillator", lines: ["Main"], params: [{id: "length", label: "Length", default: 14}] },
-        roc: { name: "ROC (Rate of Change)", scale: "oscillator", lines: ["Main"], params: [{id: "length", label: "Length", default: 10}] },
-        mom: { name: "Momentum", scale: "oscillator", lines: ["Main"], params: [{id: "length", label: "Length", default: 10}] },
-        tsi: { name: "TSI (True Strength Index)", scale: "oscillator", lines: ["TSI", "Signal"], params: [{id: "fast", label: "Fast", default: 13}, {id: "slow", label: "Slow", default: 25}, {id: "signal", label: "Signal", default: 13}] },
-        uo: { name: "Ultimate Oscillator", scale: "oscillator", lines: ["Main"], params: [{id: "fast", label: "Fast", default: 7}, {id: "medium", label: "Medium", default: 14}, {id: "slow", label: "Slow", default: 28}] },
-        ao: { name: "Awesome Oscillator", scale: "oscillator", lines: ["Main"], params: [{id: "fast", label: "Fast", default: 5}, {id: "slow", label: "Slow", default: 34}] },
-        ppo: { name: "PPO (Percentage Price Osc)", scale: "oscillator", lines: ["PPO", "Histogram", "Signal"], params: [{id: "fast", label: "Fast", default: 12}, {id: "slow", label: "Slow", default: 26}, {id: "signal", label: "Signal", default: 9}] },
-        fisher: { name: "Fisher Transform", scale: "oscillator", lines: ["Fisher", "Signal"], params: [{id: "length", label: "Length", default: 9}] },
-        cmo: { name: "CMO (Chande Momentum)", scale: "oscillator", lines: ["Main"], params: [{id: "length", label: "Length", default: 14}] },
-    },
-    "Volatility": {
-        bbands: { name: "Bollinger Bands", scale: "overlay", lines: ["Lower Band", "Mid Band", "Upper Band", "Bandwidth", "Percent"], params: [
-            {id: "length", label: "Length", default: 20},
-            {id: "std", label: "Std Dev", default: 2.0}
-        ]},
-        atr: { name: "ATR (Average True Range)", scale: "oscillator", lines: ["Main"], params: [{id: "length", label: "Length", default: 14}] },
-        natr: { name: "NATR (Normalized ATR %)", scale: "oscillator", lines: ["Main"], params: [{id: "length", label: "Length", default: 14}] },
-        kc: { name: "Keltner Channels", scale: "overlay", lines: ["Lower", "Mid", "Upper"], params: [
-            {id: "length", label: "Length", default: 20},
-            {id: "scalar", label: "Multiplier", default: 2.0}
-        ]},
-        donchian: { name: "Donchian Channels", scale: "overlay", lines: ["Lower", "Mid", "Upper"], params: [
-            {id: "lower_length", label: "Lower Length", default: 20},
-            {id: "upper_length", label: "Upper Length", default: 20}
-        ]},
-        accbands: { name: "Acceleration Bands", scale: "overlay", lines: ["Lower", "Mid", "Upper"], params: [{id: "length", label: "Length", default: 20}] },
-        massi: { name: "Mass Index", scale: "oscillator", lines: ["Main"], params: [{id: "fast", label: "Fast", default: 9}, {id: "slow", label: "Slow", default: 25}] },
-    },
-    "Volume": {
-        volume: { name: "Raw Volume", scale: "volume", lines: ["Main"], params: [] },
-        vma: { name: "VMA (Volume Moving Avg)", scale: "volume", lines: ["Main"], params: [{id: "length", label: "Length", default: 14}] },
-        obv: { name: "On-Balance Volume (OBV)", scale: "volume", lines: ["Main"], params: [] },
-        vwap: { name: "VWAP", scale: "overlay", lines: ["Main"], params: [] },
-        cmf: { name: "Chaikin Money Flow", scale: "oscillator", lines: ["Main"], params: [{id: "length", label: "Length", default: 20}] },
-        ad: { name: "Accumulation/Distribution", scale: "volume", lines: ["Main"], params: [] },
-        adosc: { name: "AD Oscillator (Chaikin)", scale: "oscillator", lines: ["Main"], params: [{id: "fast", label: "Fast", default: 3}, {id: "slow", label: "Slow", default: 10}] },
-        eom: { name: "Ease of Movement", scale: "oscillator", lines: ["Main"], params: [{id: "length", label: "Length", default: 14}] },
-        pvt: { name: "Price Volume Trend", scale: "volume", lines: ["Main"], params: [] },
-    },
-    "Statistics": {
-        variance: { name: "Variance", scale: "oscillator", lines: ["Main"], params: [{id: "length", label: "Length", default: 14}] },
-        stdev: { name: "Standard Deviation", scale: "oscillator", lines: ["Main"], params: [{id: "length", label: "Length", default: 14}] },
-        zscore: { name: "Z-Score", scale: "oscillator", lines: ["Main"], params: [{id: "length", label: "Length", default: 30}] },
-        slope: { name: "Slope (Linear Reg)", scale: "oscillator", lines: ["Main"], params: [{id: "length", label: "Length", default: 14}] },
-        entropy: { name: "Entropy", scale: "oscillator", lines: ["Main"], params: [{id: "length", label: "Length", default: 10}] },
-        kurtosis: { name: "Kurtosis", scale: "oscillator", lines: ["Main"], params: [{id: "length", label: "Length", default: 30}] },
-        skew: { name: "Skewness", scale: "oscillator", lines: ["Main"], params: [{id: "length", label: "Length", default: 30}] },
-        log_return: { name: "Log Return", scale: "oscillator", lines: ["Main"], params: [{id: "length", label: "Length", default: 1}] },
-    }
-};
-
-const FLAT_INDICATORS = {};
-Object.values(INDICATOR_GROUPS).forEach(group => {
-    Object.assign(FLAT_INDICATORS, group);
-});
 
 // ==========================================
 // CONFIGURATION NODES
@@ -312,8 +218,13 @@ export const ApiKeyNode = ({ id, data }) => {
 
 export const IndicatorNode = ({ id, data }) => {
   const currentIndKey = data.indicator !== undefined ? data.indicator : "rsi";
-  const indDef = FLAT_INDICATORS[currentIndKey] || FLAT_INDICATORS.rsi;
-  const showDropdown = indDef.lines.length > 1;
+  const { registry, error } = useIndicators();
+  // Unknown = not in the backend registry (e.g. a hand-edited import). The
+  // node still renders so the user can pick a supported indicator.
+  const indDef = registry?.byMethod[currentIndKey] || null;
+  const unknown = !!registry && !indDef;
+  const outputs = indDef?.outputs || [];
+  const showDropdown = outputs.length > 1;
 
   const currentParams = data.params || {};
 
@@ -331,17 +242,23 @@ export const IndicatorNode = ({ id, data }) => {
     </div>
     <div className="p-4 space-y-3 bg-bg/80 rounded-b">
       
-      <select className="w-full bg-inset border border-border text-text text-[11px] rounded-md p-2 nodrag focus:border-accent outline-none font-semibold" value={currentIndKey} onChange={(e) => data.onChange(id, 'indicator', e.target.value)}>
-          {Object.entries(INDICATOR_GROUPS).map(([groupName, indicators]) => (
+      <select className={`w-full bg-inset border text-text text-[11px] rounded-md p-2 nodrag focus:border-accent outline-none font-semibold ${unknown ? 'border-danger' : 'border-border'}`} value={currentIndKey} onChange={(e) => data.onChange(id, 'indicator', e.target.value)}>
+          {!registry && <option value={currentIndKey}>{error ? 'Failed to load indicators' : 'Loading indicators…'}</option>}
+          {unknown && <option value={currentIndKey}>Unknown: {currentIndKey}</option>}
+          {registry && registry.categories.map(groupName => (
               <optgroup key={groupName} label={groupName}>
-                  {Object.keys(indicators).map(key => (
-                      <option key={key} value={key}>{indicators[key].name}</option>
+                  {registry.groups[groupName].map(ind => (
+                      <option key={ind.method} value={ind.method}>{ind.label}</option>
                   ))}
               </optgroup>
           ))}
       </select>
 
-      {indDef.params && indDef.params.length > 0 && (
+      {unknown && (
+          <p className="text-[10px] text-danger">Indicator &quot;{currentIndKey}&quot; is not supported by the backend. Pick another one.</p>
+      )}
+
+      {indDef && indDef.params.length > 0 && (
           <div className="border-t border-border pt-3 space-y-2">
               {indDef.params.map(p => (
                   <div key={p.id} className="flex items-center space-x-2">
@@ -362,8 +279,8 @@ export const IndicatorNode = ({ id, data }) => {
         <div className="border-t border-border pt-3 mt-3 animate-fade-in">
           <label className="text-[9px] text-info font-bold uppercase mb-1.5 block">Signal Output (Multi-Line)</label>
           <select className="w-full bg-inset border border-info/50 text-text text-[10px] rounded-md p-1.5 focus:border-info outline-none" value={data.outputIdx !== undefined ? data.outputIdx : 0} onChange={(e) => data.onChange(id, 'outputIdx', parseInt(e.target.value))}>
-            {indDef.lines.map((lineName, idx) => (
-                <option key={idx} value={idx}>{lineName} (Idx: {idx})</option>
+            {outputs.map((lineName, idx) => (
+                <option key={idx} value={idx} disabled={indDef.disabled_outputs.includes(idx)}>{lineName} (Idx: {idx}){indDef.disabled_outputs.includes(idx) ? ' — look-ahead, disabled' : ''}</option>
             ))}
           </select>
         </div>

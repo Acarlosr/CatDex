@@ -49,6 +49,8 @@ The engine evaluates the whole graph once per **closed candle**, per pair. Knowi
 
 `method` is the key, `params` must use **exactly these IDs** (they are passed straight to pandas-ta; a wrong name silently falls back to defaults), `output_idx` selects the line.
 
+The authoritative list lives in `backend/engine/indicator_registry.py` and is served at `GET /api/indicators` (same names, param ids, defaults and output order as below). The validator rejects unknown methods, out-of-range `output_idx` and disabled outputs at import time; unknown param ids only produce a warning.
+
 **Trend / overlap**
 
 | Key | Params (default) | output_idx → line |
@@ -60,6 +62,7 @@ The engine evaluates the whole graph once per **closed candle**, per pair. Knowi
 | `adx` | `length` (14) | 0 ADX, 1 +DI, 2 −DI |
 | `psar` | `af0` (0.02), `af` (0.2) | 0 long, 1 short, 2 AF, 3 reversal |
 | `ichimoku` | `tenkan` (9), `kijun` (26), `senkou` (52) | 0 span A, 1 span B, 2 tenkan, 3 kijun. **4 (chikou) is disabled — look-ahead.** |
+| `vortex` | `length` (14) | 0 VI+, 1 VI− (oscillator around 1.0; VI+ crossing above VI− = trend turning up) |
 
 **Momentum (oscillators)**
 
