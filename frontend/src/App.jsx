@@ -9,7 +9,7 @@ import ApiKeyGate from './components/ApiKeyGate';
 import Toaster from './components/ui/Toast';
 import ConfirmDialogHost from './components/ui/ConfirmDialog';
 import { Skeleton } from './components/ui/Skeleton';
-import { apiClient, getApiKey } from './api/client';
+import { apiClient, checkSession, logout, migrateLegacyKey } from './api/client';
 
 const ChartEngine = lazy(() => import('./components/ChartEngine'));
 const BotBuilder = lazy(() => import('./components/Builder/BotBuilder'));
@@ -51,7 +51,8 @@ export default function App() {
   const [editingBot, setEditingBot] = useState(null);
 
   const [sidebarOpen, setSidebarOpen] = useState(window.innerWidth > 768);
-  const [hasApiKey, setHasApiKey] = useState(() => Boolean(getApiKey()));
+  // null = session probe in flight, true/false = logged in / show gate
+  const [hasApiKey, setHasApiKey] = useState(null);
   const [signedOutReason, setSignedOutReason] = useState(null);
   const pollIntervalRef = useRef(15000);
   const userClosedSidebarRef = useRef(false);
@@ -64,6 +65,26 @@ export default function App() {
       };
       window.addEventListener('api-key-invalid', handleKeyInvalid);
       return () => window.removeEventListener('api-key-invalid', handleKeyInvalid);
+  }, []);
+
+  // Session probe on load; a key left behind by the localStorage-era UI is
+  // exchanged for a cookie first. Network errors fall through to the gate,
+  // which has its own "backend unreachable" handling.
+  useEffect(() => {
+      let cancelled = false;
+      (async () => {
+          await migrateLegacyKey();
+          let ok = false;
+          try { ok = await checkSession(); } catch { ok = false; }
+          if (!cancelled) setHasApiKey(ok);
+      })();
+      return () => { cancelled = true; };
+  }, []);
+
+  const handleLogout = useCallback(async () => {
+      await logout();
+      setSignedOutReason(null);
+      setHasApiKey(false);
   }, []);
 
   useEffect(() => {
@@ -226,6 +247,10 @@ export default function App() {
       if (window.innerWidth < 768) setSidebarOpen(false);
   }, []);
 
+  if (hasApiKey === null) {
+    return <div className="h-[100dvh] bg-bg" aria-busy="true" />;
+  }
+
   if (!hasApiKey) {
     return (
       <>
@@ -270,6 +295,7 @@ export default function App() {
         sidebarOpen={sidebarOpen}
         setSidebarOpen={setSidebarOpenUser}
         backendOk={backendOk}
+        onLogout={handleLogout}
       />
 
       <div className={`flex-1 flex flex-col h-full overflow-hidden relative transition-all duration-300 ease-in-out ${sidebarOpen ? 'md:ml-64' : 'ml-0'}`}>

@@ -41,7 +41,7 @@ You're ready when the frontend logs `Starting nginx`.
    ```
 
    If permission is denied: `sudo grep MASTER_API_KEY data/.env`.
-4. Paste the key and sign in. The key is stored in your browser; you won't be asked again on this device.
+4. Paste the key and sign in. You enter it once; the backend sets a session cookie (the key itself is never stored in the browser). After a backend restart (`docker compose restart backend`, update, reboot) you log in again.
 
 > **Troubleshooting login:** if the app says it cannot reach the backend, wait a minute (first start is slow) and try again. Check `docker compose ps` — both containers should be `Up`, backend `healthy`.
 

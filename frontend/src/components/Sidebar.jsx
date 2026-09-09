@@ -40,7 +40,7 @@ const NAV_ITEMS = [
   },
 ];
 
-export default function Sidebar({ activeView, setActiveView, openCharts, closeChart, runningBots, openBotChart, sidebarOpen, setSidebarOpen, backendOk = true }) {
+export default function Sidebar({ activeView, setActiveView, openCharts, closeChart, runningBots, openBotChart, sidebarOpen, setSidebarOpen, backendOk = true, onLogout }) {
   const [theme, setThemeState] = useState(getTheme());
   useEffect(() => {
     const sync = () => setThemeState(getTheme());
@@ -195,6 +195,16 @@ export default function Sidebar({ activeView, setActiveView, openCharts, closeCh
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
                 </svg>
               )}
+            </button>
+            <button
+              onClick={onLogout}
+              title="Log out"
+              aria-label="Log out"
+              className="p-1 rounded-md text-muted hover:text-danger hover:bg-overlay border border-transparent hover:border-border transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/70"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l-3 3m0 0l3 3m-3-3h12.75" />
+              </svg>
             </button>
           </div>
         </div>

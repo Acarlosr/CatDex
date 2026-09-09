@@ -126,7 +126,7 @@ ApexAlgo is a full-stack algorithmic trading platform for building, backtesting,
 
 ### Security
 - **Fernet Encryption** — exchange API credentials encrypted at rest
-- **Timing-Safe Authentication** — all endpoints require `X-API-Key` with HMAC-based comparison
+- **Timing-Safe Authentication** — `X-API-Key` header for scripts, HttpOnly session cookie for the UI, both HMAC-compared
 - **Local TLS** — self-signed or mkcert-generated trusted certificates
 - **Environment Isolation** — secrets auto-generated during setup, never committed
 
@@ -313,7 +313,7 @@ In Docker this is optional: an empty value means the frontend uses its own origi
 | `BIND_ADDR` | Host interface for published ports (default `127.0.0.1`; set `0.0.0.0` for LAN) | No — set when needed |
 | `ENABLE_DOCS` | Set `1` to enable Swagger UI at `/docs` | No |
 
-The frontend no longer embeds the API key in its bundle. On first visit, enter the `MASTER_API_KEY` from `data/.env` in the login screen; it is stored in your browser's localStorage.
+The frontend never embeds the API key. On first visit, enter the `MASTER_API_KEY` from `data/.env` in the login screen; the backend sets an `HttpOnly` session cookie (invalidated by a backend restart). Scripts and `curl` can still authenticate with the `X-API-Key` header.
 
 ---
 
@@ -507,8 +507,8 @@ Found a security vulnerability? Please **do not** open a public issue — follow
 ## Security
 
 - Exchange API keys are encrypted at rest using Fernet symmetric encryption
-- All API endpoints require the `X-API-Key` header (timing-safe comparison, failed attempts logged and rate-limited per IP)
-- The web UI never embeds the master key: you enter it once in the login screen; the browser talks to a single origin (nginx proxies `/api` to the backend)
+- All API endpoints require either the `X-API-Key` header (scripts, curl) or the browser session cookie; both use timing-safe comparison, failed attempts are logged and rate-limited per IP
+- The web UI never embeds or stores the master key: you enter it once in the login screen and receive an `HttpOnly`, `SameSite=Strict`, `Secure` session cookie that JavaScript cannot read; sessions end on backend restart or log-out. The browser talks to a single origin (nginx proxies `/api` to the backend)
 - Ports bind to `127.0.0.1` by default; LAN access is an explicit opt-in (`BIND_ADDR=0.0.0.0`)
 - The backend container runs as a non-root user; `.env` is created with restrictive permissions and excluded from version control
 - Live order execution requires a `max_order_value` safety cap, sizes against the verified exchange balance, and reconciles every order fill (`fetch_order`) before booking

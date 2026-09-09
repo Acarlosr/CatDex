@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { apiClient, setApiKey, API_BASE_URL } from '../api/client';
+import { login, API_BASE_URL } from '../api/client';
 import Button from './ui/Button';
 
 export default function ApiKeyGate({ onUnlock, signedOutReason = null }) {
@@ -17,10 +17,7 @@ export default function ApiKeyGate({ onUnlock, signedOutReason = null }) {
     setError(null);
     setNetworkError(false);
     try {
-      await apiClient.get('/api/bots/summary', {
-        headers: { 'X-API-Key': trimmed }
-      });
-      setApiKey(trimmed);
+      await login(trimmed);
       onUnlock();
     } catch (err) {
       const status = err.response?.status;
@@ -69,14 +66,14 @@ export default function ApiKeyGate({ onUnlock, signedOutReason = null }) {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
               <span className="leading-relaxed">
-                Your session was signed out — the API key changed or was invalid.
+                Your session was signed out — the backend restarted or the API key changed.
                 Re-enter the key from <span className="font-num">data/.env</span>.
               </span>
             </div>
           )}
 
           <p className="text-xs text-muted text-center mb-6 leading-relaxed">
-            Enter your API key to unlock the dashboard. You can find it as{' '}
+            Enter your API key to start a session. You can find it as{' '}
             <span className="text-text font-num">MASTER_API_KEY</span> in{' '}
             <span className="text-text font-num">data/.env</span> on the server.
           </p>

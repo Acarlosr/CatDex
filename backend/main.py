@@ -27,7 +27,7 @@ from backend.models.bots import BotConfig
 from backend.models.bot_logs import BotLog
 
 # Import the routers
-from backend.routers import keys, data, bots, trades
+from backend.routers import auth, keys, data, bots, trades
 # Import the background services
 from backend.engine.candle_poller import candle_poller
 from backend.engine.bot_manager import bot_manager
@@ -69,12 +69,13 @@ cors_origins = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
-    allow_credentials=False,
+    allow_credentials=True,  # session cookie; origins are explicit, never "*"
     allow_methods=["*"],
     allow_headers=["*"],
 )
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 # Connect routers to the main application
+app.include_router(auth.router)
 app.include_router(keys.router)
 app.include_router(data.router)
 app.include_router(bots.router)
