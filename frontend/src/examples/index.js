@@ -1,29 +1,30 @@
 /**
  * Bundled example strategies — mirrors of the files in the repo's `examples/`
- * directory (there are more there). Each entry is a ready-to-POST payload for
- * `/api/bots/import`.
+ * directory. Each entry is a ready-to-POST payload for `/api/bots/import`.
+ * All three were backtested in the engine on Binance BTC/ETH(/SOL) USDC,
+ * Dec 2023 – Sep 2026; see STRATEGY_CONTEXT.md §4.9 for the numbers.
  */
-import rsiDipHunter from './RSI_Dip_Hunter.apex.json';
-import emaTrendRider from './EMA_Trend_Rider.apex.json';
-import bollingerBounce from './Bollinger_Bounce.apex.json';
+import supertrendTrend from './Supertrend_Trend_1d.apex.json';
+import donchianBreakout from './Donchian_Breakout_1d.apex.json';
+import emaCross from './EMA_Cross_4h.apex.json';
 
 export const EXAMPLE_BOTS = [
   {
-    id: 'rsi-dip-hunter',
-    name: 'RSI Dip Hunter',
-    description: 'Buys RSI dips above the 200 EMA trend, exits on overbought.',
-    payload: rsiDipHunter,
+    id: 'supertrend-trend-1d',
+    name: 'Supertrend Trend 1d',
+    description: 'Daily trend follower: buys when the Supertrend flips up, sells when it flips down. 15% disaster trail.',
+    payload: supertrendTrend,
   },
   {
-    id: 'ema-trend-rider',
-    name: 'EMA Trend Rider',
-    description: 'Rides trends using an EMA crossover entry and exit.',
-    payload: emaTrendRider,
+    id: 'donchian-breakout-1d',
+    name: 'Donchian Breakout 1d',
+    description: 'Turtle-style breakout: new 55-day high in, new 20-day low out. Few trades, high win rate.',
+    payload: donchianBreakout,
   },
   {
-    id: 'bollinger-bounce',
-    name: 'Bollinger Bounce',
-    description: 'Mean-reversion bounces off the lower Bollinger band.',
-    payload: bollingerBounce,
+    id: 'ema-cross-4h',
+    name: 'EMA Cross 4h',
+    description: 'More active EMA 21/55 crossover on 4h with an ATR trailing stop. Roughly one trade per pair per week.',
+    payload: emaCross,
   },
 ];

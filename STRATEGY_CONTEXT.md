@@ -1,302 +1,294 @@
 # ApexAlgo Strategy Builder — AI Prompt Context
 
-> Copy and paste this file (or the relevant sections) into any AI assistant to get strategy suggestions that are **directly buildable** in ApexAlgo's visual node editor. The AI will know exactly which indicators, conditions, logic gates, and risk tools are available — and how to wire them.
+> Paste this file into any AI assistant (or point it at the raw GitHub URL) and ask for a strategy. Everything it produces will then be **directly importable** into ApexAlgo (Bot Manager → Import) and, more importantly, will be designed around how the engine actually trades — not around indicator folklore.
+
+**If you are the AI reading this:** you are designing a real trading system that will run on real money. Sections 1–3 tell you how the engine executes; section 4 is the design playbook you must follow; section 5 is the exact file format; section 6 has three vetted templates to start from. Work through the checklist at the end of section 4 before you output anything.
 
 ---
 
-## What is ApexAlgo?
+## 1. What ApexAlgo is — and how it executes
 
-ApexAlgo is a no-code algorithmic trading platform. You build strategies by connecting visual nodes on a canvas:
+ApexAlgo is a no-code, **long-only spot** trading bot. A strategy is a graph of nodes:
 
-**Indicators** output a number per candle (e.g. RSI value, moving average price).
-**Conditions** compare two values and output true/false (e.g. RSI > 70).
-**Logic Gates** combine conditions (e.g. RSI > 70 AND price crosses below upper Bollinger Band).
-**Actions** execute trades when the logic chain resolves to true.
-**Risk Nodes** attach stop-losses and take-profits to entry actions.
+```
+Indicator / Price Data ──> Condition ──> Logic Gate (optional) ──> Action (BUY / SELL)
+                                                                      └──> Take Profit / Stop Loss nodes (attached to the BUY action)
+```
 
-The flow is always: **Indicator/Price Data --> Condition --> Logic Gate (optional) --> Action --> Risk Nodes**
+The engine evaluates the whole graph once per **closed candle**, per pair. Knowing exactly what happens on that tick is what separates strategies that look good from strategies that make money:
 
----
-
-## Available Node Types
-
-### 1. Configuration Nodes (one of each per strategy)
-
-**Main Configuration**
-- Algorithm name
-- Data interval: depends on the selected exchange (e.g. OKX supports `1m` through `3M`; Coinbase supports `1m`, `5m`, `15m`, `30m`, `1h`, `2h`, `6h`, `1d`). The timeframe dropdown updates automatically when you change the exchange.
-- Max positions: number of concurrent open positions allowed
-- Position limit scope: `per_pair` (e.g. 1x BTC + 1x ETH) or `global` (total across all pairs)
-- Cooldown: max N new entries per X candles (0 = off)
-- Max drawdown %: evaluated after the full backtest completes — if exceeded, the bot is stopped and not allowed to go live (0 = off). During live trading, checked after every closed position. Calculated as `(peak_equity - current_equity) / peak_equity * 100` where equity = starting capital + cumulative P&L
-- Max order value USD: rejects live orders above this dollar amount (0 = off)
-- Execution mode: `Paper Trading` (simulated) or `Live Exchange` (real orders)
-
-**Asset Whitelist**
-- Comma-separated trading pairs, e.g. `BTC/USDT, ETH/USDT, SOL/USDT`
-
-**Backtest Engine**
-- Toggle: run historical backtest on start
-- Start capital (USD)
-- Lookback period (number of candles)
-
-**Exchange Routing**
-- If an API key is selected: the exchange is automatically derived from the key (shown as a read-only badge). The key determines whether the bot runs in sandbox (paper) or live mode.
-- If no API key is selected: a **Data Exchange** dropdown appears, letting you manually select which exchange provides market data. The bot runs in forward-test mode (local simulation, no API calls).
-- Supported exchanges: OKX, Binance, Bitvavo, Coinbase, Crypto.com, Kraken, KuCoin
+| Mechanic | What the engine does |
+|---|---|
+| **Evaluation moment** | On the close of each candle. `offset: 0` on a price node means *the candle that just closed*, not a still-forming candle. |
+| **Entry fill** | At the close price of the signal candle, plus `slippage` %. Fee is charged on the notional. |
+| **Direction** | Long only. `BUY` opens, `SELL` closes. There is no shorting and no leverage. |
+| **Positions per pair** | **Exactly one open position per pair at a time.** A BUY signal while a position is open on that pair is ignored. `max_positions` caps how many pairs can be open at once (`global`) or is applied per pair (`per_pair`, effectively 1). |
+| **Re-entry** | The moment a position closes, the next candle whose entry condition is true opens a new one. A *state* condition (e.g. `RSI < 30`) that stays true for 10 candles will therefore re-enter immediately after every exit — see §4.2. |
+| **Exit checks** | Every candle while a position is open, in this order: **stop-losses** (against the candle low) → **take-profits** (against high/low) → **strategy SELL signal** (at close). Only one group fires per candle; a hit stop-loss suppresses take-profits on the same candle. |
+| **Trailing anchor** | Trailing levels use the highest high reached **before** the current candle, so one candle cannot both raise the trail and trigger it against its own low. |
+| **Gaps** | If a candle opens beyond the trigger, the fill is at the open (worse for stops, better for targets). |
+| **Partial exits** | `close_amount_value` is a % of the *original* position. Each TP/SL tier fires once. A 100% tier closes whatever is left. |
+| **Sizing** | `amount_type: percentage` = % of the **currently available cash** in the shared pool (all pairs of the bot share one pool). Capital is locked while a position is open, so 50% sizing on two pairs = fully invested. `fixed` = fixed USD. |
+| **Cooldown** | `cooldown_trades` new entries per `cooldown_candles` candles, per bot (all pairs). |
+| **Warm-up** | Any indicator that is still NaN makes its condition *false*, never true. A 200-EMA eats the first 200 candles of the lookback. |
+| **Backtest ≙ live** | Paper/live trading runs the same node graph and the same exit rules on the same closed candles. What differs is fills (real order book) and sizing (see `live_allocation_pct`). |
+| **Guards** | `max_drawdown` (peak-to-trough on mark-to-market equity) and `max_capital_loss` (loss of starting capital) stop or wind down the bot — in the backtest *and* live. A backtest that breaches the guard prevents the bot from going live. |
 
 ---
 
-### 2. Data Source Nodes
+## 2. Node reference
 
-#### Technical Indicators
+### 2.1 Configuration nodes (one of each)
 
-Each indicator outputs one or more signal lines. Multi-line indicators have an **output selector** to pick which line to use.
+**Main Configuration** — name, timeframe (must be supported by the exchange, §5.3), `max_positions` + scope, cooldown, `max_drawdown`, `max_capital_loss`, `drawdown_action`, `drawdown_cooldown_days`, `max_order_value`, `live_allocation_pct`, execution mode.
+**Asset Whitelist** — pairs as `BASE/QUOTE`, e.g. `BTC/USDC, ETH/USDC`. All pairs share one capital pool.
+**Backtest Engine** — run on start, start capital, lookback (candles).
+**Exchange Routing** — with an API key: exchange + sandbox/live derived from the key. Without: pick a *data exchange*; the bot forward-tests locally (no orders). Supported: OKX, Binance, Bitvavo, Coinbase, Crypto.com, Kraken, KuCoin.
 
-**Trend & Overlap** (drawn on price chart)
-| Indicator | Key | Lines | Parameters |
+### 2.2 Indicators
+
+`method` is the key, `params` must use **exactly these IDs** (they are passed straight to pandas-ta; a wrong name silently falls back to defaults), `output_idx` selects the line.
+
+**Trend / overlap**
+
+| Key | Params (default) | output_idx → line |
+|---|---|---|
+| `sma` `ema` `wma` `dema` `tema` `linreg` `midpoint` | `length` (14) | 0 |
+| `kama` | `length` (10), `fast` (2), `slow` (30) | 0 |
+| `supertrend` | `length` (10), `multiplier` (3.0) | 0 trend line, **1 direction (+1 up / −1 down)**, 2 long band, 3 short band |
+| `macd` | `fast` (12), `slow` (26), `signal` (9) | 0 MACD line, 1 histogram, 2 signal |
+| `adx` | `length` (14) | 0 ADX, 1 +DI, 2 −DI |
+| `psar` | `af0` (0.02), `af` (0.2) | 0 long, 1 short, 2 AF, 3 reversal |
+| `ichimoku` | `tenkan` (9), `kijun` (26), `senkou` (52) | 0 span A, 1 span B, 2 tenkan, 3 kijun. **4 (chikou) is disabled — look-ahead.** |
+
+**Momentum (oscillators)**
+
+| Key | Params (default) | output_idx → line | Typical range |
 |---|---|---|---|
-| SMA | `sma` | Main | length (14) |
-| EMA | `ema` | Main | length (14) |
-| WMA | `wma` | Main | length (14) |
-| DEMA | `dema` | Main | length (14) |
-| TEMA | `tema` | Main | length (14) |
-| KAMA | `kama` | Main | length (10), fast SC (2), slow SC (30) |
-| Linear Regression | `linreg` | Main | length (14) |
-| Midpoint | `midpoint` | Main | length (14) |
-| Supertrend | `supertrend` | Trend, Direction, Long, Short | ATR length (10), multiplier (3.0) |
-| MACD | `macd` | MACD Line, Histogram, Signal Line | fast (12), slow (26), signal (9) |
-| ADX | `adx` | ADX, +DI, -DI | length (14) |
-| Parabolic SAR | `psar` | Long, Short, AF, Reversal | AF step (0.02), AF max (0.2) |
-| Ichimoku Cloud | `ichimoku` | Conversion, Base, Span A, Span B, Chikou | tenkan (9), kijun (26), senkou (52) |
-
-**Momentum** (separate oscillator pane)
-| Indicator | Key | Lines | Parameters |
-|---|---|---|---|
-| RSI | `rsi` | Main | length (14) |
-| Stochastic | `stoch` | %K, %D | K (14), D (3), smooth K (3) |
-| Stochastic RSI | `stochrsi` | %K, %D | RSI length (14), stoch length (14), K (3), D (3) |
-| CCI | `cci` | Main | length (14) |
-| MFI | `mfi` | Main | length (14) |
-| Williams %R | `willr` | Main | length (14) |
-| ROC | `roc` | Main | length (10) |
-| Momentum | `mom` | Main | length (10) |
-| TSI | `tsi` | TSI, Signal | fast (13), slow (25), signal (13) |
-| Ultimate Oscillator | `uo` | Main | fast (7), medium (14), slow (28) |
-| Awesome Oscillator | `ao` | Main | fast (5), slow (34) |
-| PPO | `ppo` | PPO, Histogram, Signal | fast (12), slow (26), signal (9) |
-| Fisher Transform | `fisher` | Fisher, Signal | length (9) |
-| CMO | `cmo` | Main | length (14) |
+| `rsi` | `length` (14) | 0 | 0–100; 30/70 |
+| `stoch` | `k` (14), `d` (3), `smooth_k` (3) | 0 %K, 1 %D | 0–100; 20/80 |
+| `stochrsi` | `length` (14), `rsi_length` (14), `k` (3), `d` (3) | 0 %K, 1 %D | 0–100 |
+| `cci` | `length` (14) | 0 | ±100 |
+| `mfi` | `length` (14) | 0 | 0–100; 20/80 |
+| `willr` | `length` (14) | 0 | −100–0; −80/−20 |
+| `roc` `mom` | `length` (10) | 0 | around 0 |
+| `tsi` | `fast` (13), `slow` (25), `signal` (13) | 0 TSI, 1 signal | ±25 |
+| `uo` | `fast` (7), `medium` (14), `slow` (28) | 0 | 0–100 |
+| `ao` | `fast` (5), `slow` (34) | 0 | around 0 |
+| `ppo` | `fast` (12), `slow` (26), `signal` (9) | 0 PPO, 1 histogram, 2 signal | % around 0 |
+| `fisher` | `length` (9) | 0 fisher, 1 signal | ±2 |
+| `cmo` | `length` (14) | 0 | ±50 |
 
 **Volatility**
-| Indicator | Key | Lines | Parameters |
+
+| Key | Params (default) | output_idx → line |
+|---|---|---|
+| `bbands` | `length` (20), `std` (2.0) | 0 lower, 1 middle, 2 upper, 3 bandwidth, 4 percent-b (0 = at lower band, 1 = at upper) |
+| `atr` | `length` (14) | 0 (in price units) |
+| `natr` | `length` (14) | 0 (ATR as % of price — use this to reason about stop distances) |
+| `kc` | `length` (20), `scalar` (2.0) | 0 lower, 1 basis, 2 upper |
+| `donchian` | `lower_length` (20), `upper_length` (20) | 0 lower, 1 middle, 2 upper |
+| `accbands` | `length` (20) | 0 lower, 1 middle, 2 upper |
+| `massi` | `fast` (9), `slow` (25) | 0 |
+
+**Volume** — `volume` (raw), `vma` (`length` 14), `obv`, `vwap`, `cmf` (`length` 20, ±0.1), `ad`, `adosc` (`fast` 3, `slow` 10), `eom` (`length` 14), `pvt`. All output_idx 0.
+
+**Statistics** — `variance` `stdev` `slope` (`length` 14), `zscore` (`length` 30), `entropy` (`length` 10), `kurtosis` `skew` (`length` 30), `log_return` (`length` 1). All output_idx 0.
+
+The backend enforces this allowlist — never invent a method name.
+
+### 2.3 Price data node
+
+`type`: `open` `high` `low` `close` `volume`; `offset`: candles back (0 = just-closed candle, 1 = the one before). Negative offsets are rejected (look-ahead). Use offsets to express "closes above yesterday's high": `close(0) > high(1)`.
+
+### 2.4 Condition node
+
+`left` is a node id; `right` is a node id **or a static number**.
+
+| Operator | True when | Type |
+|---|---|---|
+| `>` `<` `>=` `<=` | comparison holds on this candle | **state** (stays true for many candles) |
+| `==` `!=` | exact equality — only sensible against integer-valued lines such as `supertrend` direction (`== 1`) | state |
+| `cross_above` | left was ≤ right on the previous candle and is > right now | **event** (true for one candle) |
+| `cross_below` | left was ≥ right and is now < right | event |
+| `increasing` / `decreasing` | left rose / fell versus the previous candle (no `right`) | state |
+| `increasing_for` / `decreasing_for` | left rose / fell on each of the last N candles; N is the static number in `right` | state |
+
+### 2.5 Logic gate node
+
+`and` `or` `xor` `nand` `nor` (two inputs), `not` (only `left`). Gates chain freely: `entry_gate = and(trend_ok, and(trigger, volume_ok))`. Warm-up NaN never turns into `true`, even through `not`.
+
+### 2.6 Action node and risk nodes
+
+BUY action: order type, sizing, fee, slippage, and the attached TP/SL tiers. SELL action: closes the position (partially with `amount_value < 100`).
+
+| TP/SL `type` | Stop-loss meaning | Take-profit meaning |
+|---|---|---|
+| `percentage` | `value` % below **entry** | `value` % above **entry** |
+| `trailing` | `value` % below the **highest high** since entry | activates once price is `value` % above entry, then closes when price drops `value` % from the peak |
+| `atr` | peak − `value` × ATR(14) (ATR length is fixed at 14 — this is a volatility trailing stop) | same formula (rarely useful as a TP) |
+| `fixed` | absolute price | absolute price |
+
+Tiers: multiple TP/SL entries on one BUY action, each with `close_amount_value` in %. Example scale-out: TP 4% close 50%, TP 8% close 100%, trailing SL 3% close 100%.
+
+---
+
+## 3. Wiring patterns
+
+```
+Regime filter:   [close] ─┐                       (state)
+                          ├─> [close > ema200] ──┐
+                 [ema200] ─┘                     ├─> [AND] ──> [BUY] ──> [SL trailing 3%]
+Trigger:         [ema20] ──> [close cross_above ema20] ┘               ──> [TP 6% close 50%]
+Exit signal:     [ema20] ──> [close cross_below ema20] ──> [SELL 100%]
+```
+
+A strategy therefore has up to four parts — **regime filter** (state), **trigger** (event), **exit plan** (SELL signal and/or TP/SL) and **risk caps** (drawdown/capital-loss guards, cooldown). Every good strategy has at least a trigger, a stop-loss and a guard.
+
+---
+
+## 4. Design playbook — read this before designing
+
+### 4.1 Start from costs, not from indicators
+
+Every round trip costs `2 × fee + 2 × slippage`. With realistic spot fees (0.1% fee, 0.05% slippage) that is **0.3% per trade**; on Coinbase/Kraken retail tiers (0.25–0.4%) it is 0.6–0.9%. A strategy whose average winner is 1% and whose win rate is 55% is a loser after costs.
+
+Rules of thumb:
+- Set `fee` to the user's real exchange fee (Binance/OKX/KuCoin ~0.1, Bitvavo 0.15–0.25, Coinbase/Kraken 0.25–0.6). Never leave fee at 0 "to see the raw edge" — the validator warns about this for a reason.
+- The average expected profit per trade must be **at least 3–5× the round-trip cost**. That immediately rules out 1m/5m strategies with tight targets for retail accounts.
+- Prefer **fewer, larger moves**: 1h–1d timeframes, targets measured in multiples of ATR, trailing exits that let trends run.
+
+### 4.2 Triggers must be events, filters must be states
+
+The most common way generated strategies fail: the entry is a *state* (`RSI < 30`, `close > EMA`, `ADX > 25`) instead of an *event*. Because the engine re-enters the candle after every exit, a state entry produces a burst of back-to-back losing trades whenever the state persists — each paying full costs.
+
+- **Trigger (event):** `cross_above` / `cross_below`, or `increasing` on a rolling extreme (`donchian` upper `increasing` = a new 20-candle high was set on this candle). Indicators have no `offset`, and a channel *includes* the current candle, so `close > donchian_upper` can never be true — use `increasing` for breakouts.
+- **Filter (state):** `close > ema200`, `adx > 20`, `supertrend direction == 1`, `natr < 6`.
+- Combine: `AND(filter, trigger)`. Never `AND(state, state)` as an entry unless you add a cooldown (`cooldown_trades: 1, cooldown_candles: N`) and understand the churn.
+- If the user insists on an oversold entry, use `rsi cross_above 30` (turning back up), never `rsi < 30` (still falling — catching knives) — and tell them this family tested negative (§4.3/§4.9).
+
+### 4.3 Match the strategy to the regime and filter for it
+
+Crypto trends hard and then chops for months; a single logic works in one regime and bleeds in the other. Pick one and **filter out the other**:
+
+| Strategy family | Works in | Filter | Exit | Measured (§4.9) |
+|---|---|---|---|---|
+| **Trend following** — Supertrend flip, EMA cross, Donchian channel breakout, on **1d or 4h** | multi-week trends | usually none needed: the opposite signal is the filter | opposite signal as SELL **plus** a wide trailing SL (12–15% on 1d, ATR 3× on 4h) as disaster stop | **+15 to +38%** with 24–32% DD across all parameter neighbours — the only family that was robustly profitable |
+| Pullback in trend — close crosses back above EMA20 while > EMA200 + ADX, RSI cross_above 30–35 in uptrend | trends with rhythm | `close > ema200`, `adx > 20` | ATR trailing + partial TP | **−11 to −20%** on 4h: stops hit 3× as often as targets. Not recommended without a proven edge |
+| Mean reversion — Bollinger re-entry, %b, RSI cross_above 30, in `adx < 25` | ranges | `adx < 25`, RSI not collapsing | fixed TP at mean/upper band + hard SL | **−16 to −19%** on 1h and 4h, every variant. Long-only spot with 0.3–0.6% round-trip cost cannot afford the stop-outs. Only build this if the user insists, and say it tested negative |
+| Momentum — MACD histogram cross 0 with EMA200 filter | early trends | `close > ema200` | opposite cross + trailing | **−22%** on 1d: too many false turns in chop |
+
+Default to **trend following on 1d, with 4h as the "more active" option**. Don't mix families in one graph ("RSI oversold AND breakout") — the conditions rarely coincide and the bot does nothing, or the filter cancels the edge. Adding an `ema200` filter to a trend follower *reduced* results in our tests (it delays entries after every bear market) — the opposite-signal exit already keeps the bot out of downtrends.
+
+### 4.4 Size stops from volatility, not from round numbers
+
+A 2% stop on BTC 1h is inside the noise (1h NATR is ~0.5–1%, so a 2× ATR stop is 1–2%; on 4h it is 2–4%, on 1d 5–9%). A 2% stop on a **1d** chart is guaranteed to be hit by noise; a 10% stop on **15m** never triggers and the trade dies by a thousand cuts.
+
+| Timeframe | Typical BTC/ETH NATR(14) | Reasonable SL | Reasonable first TP |
 |---|---|---|---|
-| Bollinger Bands | `bbands` | Lower, Mid, Upper, Bandwidth, Percent | length (20), std dev (2.0) |
-| ATR | `atr` | Main | length (14) |
-| Normalized ATR % | `natr` | Main | length (14) |
-| Keltner Channels | `kc` | Lower, Mid, Upper | length (20), multiplier (2.0) |
-| Donchian Channels | `donchian` | Lower, Mid, Upper | lower length (20), upper length (20) |
-| Acceleration Bands | `accbands` | Lower, Mid, Upper | length (20) |
-| Mass Index | `massi` | Main | fast (9), slow (25) |
+| 15m | 0.3–0.6% | 1–1.5% or ATR 2× | 1.5–3% (costs make this marginal) |
+| 1h | 0.5–1.2% | 1.5–3% or ATR 2–2.5× | 3–6% |
+| 4h | 1.2–2.5% | 3–6% or ATR 2.5–3× | 6–12% |
+| 1d | 2.5–5% | 6–12% or ATR 3× | 12–25% or trailing only |
 
-**Volume**
-| Indicator | Key | Lines | Parameters |
-|---|---|---|---|
-| Raw Volume | `volume` | Main | — |
-| VMA | `vma` | Main | length (14) |
-| OBV | `obv` | Main | — |
-| VWAP | `vwap` | Main | — |
-| Chaikin Money Flow | `cmf` | Main | length (20) |
-| Accumulation/Distribution | `ad` | Main | — |
-| AD Oscillator (Chaikin) | `adosc` | Main | fast (3), slow (10) |
-| Ease of Movement | `eom` | Main | length (14) |
-| Price Volume Trend | `pvt` | Main | — |
+Altcoins run 1.5–3× these numbers — widen stops or drop them from the whitelist. Prefer the `atr` stop type for multi-pair bots: it self-adjusts per pair.
 
-**Statistics**
-| Indicator | Key | Lines | Parameters |
-|---|---|---|---|
-| Variance | `variance` | Main | length (14) |
-| Standard Deviation | `stdev` | Main | length (14) |
-| Z-Score | `zscore` | Main | length (30) |
-| Slope | `slope` | Main | length (14) |
-| Entropy | `entropy` | Main | length (10) |
-| Kurtosis | `kurtosis` | Main | length (30) |
-| Skewness | `skew` | Main | length (30) |
-| Log Return | `log_return` | Main | length (1) |
+Aim for **reward:risk ≥ 1.5** on fixed targets, and let trailing stops handle the fat tail in trend systems. If a stop and a target are both fixed and the target is smaller than the stop, the win rate must exceed 60% after costs — very few crypto signals deliver that.
 
-#### Price Data Node
-- Outputs raw candle values: `open`, `high`, `low`, `close`, or `volume`
-- Candle offset: current (live), previous (closed), or 2 candles ago
+### 4.5 Keep it simple; more indicators = more overfit
 
----
+- 1 filter + 1 trigger + 1 exit rule beats 5 indicators. Every extra condition halves the trade count and doubles the chance the backtest is fitting noise.
+- Default parameters (14, 20, 50, 200) are fine. Do not "optimize" to 13/27/183 — that is curve fitting.
+- Use the same parameters across all whitelisted pairs. If it only works on one pair, it does not work.
+- Do not stack multiple oscillators (RSI + Stoch + CCI) — they measure the same thing.
 
-### 3. Condition Node
+### 4.6 Position sizing and portfolio guards
 
-Compares two inputs and outputs true/false per candle.
+- **`amount_value` 25–50%** per trade for 2–4 pairs, so the pool can hold several positions; 100% on a single pair is acceptable for a pure trend follower with a trailing stop.
+- Always set **`max_drawdown`** with **`drawdown_action: "block_entries"`** and **`max_capital_loss` 30–40**. Size the drawdown limit to the strategy: fully-invested daily trend following on BTC/ETH runs 25–32% drawdowns in normal bear phases (buy & hold ran 59% in the same window), so set **30–35** there; 15–20 is right only for low-exposure or short-holding strategies. A limit below the strategy's natural drawdown makes the backtest pause entries for weeks (`entries_blocked_days` in the summary shows this) and the live bot will do the same.
+- `close_all` is right only for strategies whose exits are *not* trend-following.
+- Add a light **cooldown** (e.g. `cooldown_trades: 1, cooldown_candles: 3–6`) to trend systems to stop whipsaw re-entries around a flat moving average.
+- Multi-pair: 2–3 liquid majors (`BTC`, `ETH`, optionally `SOL`). Correlation is high, so treat them as one bet when choosing `amount_value`. Adding SOL to the daily templates lowered the return in our tests; more pairs ≠ more diversification here.
 
-**Inputs:**
-- **Input A (left)**: connect an indicator or price data node
-- **Input B (right)**: connect another indicator/price data node, OR enter a static number
+### 4.7 Backtest hygiene — how to read the result
 
-**Operators:**
-| Operator | Description |
-|---|---|
-| `>` | A is greater than B |
-| `<` | A is less than B |
-| `>=` | A is greater than or equal to B |
-| `<=` | A is less than or equal to B |
-| `==` | A equals B |
-| `!=` | A does not equal B |
-| `cross_above` | A crosses above B (was below, now above) |
-| `cross_below` | A crosses below B (was above, now below) |
-| `increasing` | A is rising (single input, no B needed) |
-| `decreasing` | A is falling (single input, no B needed) |
-| `increasing_for` | A has been rising for N consecutive bars |
-| `decreasing_for` | A has been falling for N consecutive bars |
+- `backtest_lookback` must cover **several regimes** — at least one bull and one bear phase: ≥ 4 000 candles on 1h (≈ 6 months, still thin), ≥ 4 000–6 000 on 4h (≈ 2–3 years), ≥ 700–1 000 on 1d (≈ 2–3 years). A 2 000-candle 4h window is a single regime and proves nothing. Fewer than ~20 closed trades means the statistics are noise.
+- Check the exchange actually has that much history (OKX/Crypto.com USDC pairs may be young; Kraken serves only the last 720 candles). The backend logs a warning when less is available.
+- Judge on **profit factor > 1.3, max drawdown < ~25%, and return vs. buy & hold** on the same window. A 40% return with 45% drawdown during a bull run is worse than holding.
+- The equity curve should rise across the whole window, not in one lucky trade. If one trade makes half the profit, the strategy is a lottery ticket.
+- The first run should be **forward test / sandbox**. Only after weeks of paper results that match the backtest should the user consider live.
 
----
+### 4.8 Common mistakes the validator will *not* catch (but the market will)
 
-### 4. Logic Gate Node
+| Mistake | Why it hurts | Fix |
+|---|---|---|
+| State entry (`rsi < 30`) | re-enters every candle after each exit | `rsi cross_above 30` |
+| `AND` of two rarely-coinciding states | 0–5 trades in a year | one filter + one event |
+| TP 1–2% on 1h with 0.25% fees | costs eat the edge | TP ≥ 3–5× round trip, or trailing |
+| 2% stop on 1d, 10% stop on 15m | noise stops / no protection | size from NATR (§4.4) |
+| Trailing stop on a mean-reversion trade | gives back the bounce | fixed TP at the mean + hard SL |
+| No stop at all, only a SELL signal | one crash = account | always a SL tier |
+| `ema200` with `backtest_lookback: 300` | 200 candles warm-up, 100 candles tested | lookback ≥ 10× longest length |
+| `==` on a float line (`rsi == 30`) | never exactly equal | `cross_above` / `>=` |
+| `increasing_for` without a number in `right` | defaults to 2, probably not what you meant | put N (e.g. `3`) in `right` |
+| `ichimoku` output 4 (chikou) | look-ahead — disabled, always false | use 0–3 |
+| Mixing `symbol` quotes (`BTC/USDT` + `ETH/USDC`) | separate balances live | one quote currency per bot |
+| `4h` on Coinbase, `3m` on Kraken | unsupported timeframe → import error | see §5.3 |
+| `max_drawdown: 0` | nothing stops a broken bot | 15–30 + `block_entries` + `max_capital_loss` |
 
-Combines two condition outputs into a single true/false signal.
+### 4.9 What we measured (Binance USDC pairs, fee 0.1%, slippage 0.05%, $1 000, run in the real engine, Sept 2026)
 
-| Gate | Description |
-|---|---|
-| `AND` | Both inputs must be true |
-| `OR` | At least one input must be true |
-| `XOR` | Exactly one input must be true |
-| `NAND` | Not both true (inverse of AND) |
-| `NOR` | Neither true (inverse of OR) |
-| `NOT` | Inverts a single input (one input only) |
+Windows: 1d = 1 000 candles (Dec 2023 → Sep 2026, includes the 2024–25 bull run and the 2026 drawdown); 4h = 6 000 candles (same period); "4h short" = 2 000 candles (Oct 2025 → Sep 2026, bear phase: BTC −31%, ETH −35%, SOL −45%). Buy & hold 50/50 BTC/ETH over the 1d window: **+49.5% with a 58.6% max drawdown**.
 
-Logic gates can be chained: the output of one gate can feed into another gate, allowing complex multi-condition strategies.
+| Strategy (pairs, size) | TF | Trades | Win % | Return | Max DD |
+|---|---|---|---|---|---|
+| Supertrend(10, 3) flip, trailing SL 15% (BTC+ETH, 50%) | 1d | 26 | 42 | **+28.8%** | 32.0% |
+| Supertrend(14, 4) flip, trailing SL 15% | 1d | 13 | 54 | +29.7% | 25.8% |
+| Supertrend(10, 2.5) flip, trailing SL 15% | 1d | 32 | 34 | +23.2% | 39.1% |
+| Supertrend(10, 3) flip, no SL | 1d | 25 | 44 | +21.0% | 27.6% |
+| Supertrend(10, 3) flip + `close > ema200` filter | 1d | 12 | 42 | +1.2% | 24.1% |
+| Supertrend(10, 3) flip (BTC+ETH+SOL, 33%) | 1d | 37 | 41 | +13.4% | 31.1% |
+| Donchian 55 `increasing` in / 20 `decreasing` out, trailing 15% | 1d | 21 | 52 | **+23.7%** | 23.7% |
+| Donchian 55 / 10, trailing 15% | 1d | 23 | 52 | +37.6% | 25.7% |
+| Donchian 40 / 20, trailing 15% | 1d | 25 | 44 | +17.0% | 30.3% |
+| Donchian 20 / 10 + volume > VMA20, trailing 12% | 1d | 41 | 42 | +23.0% | 29.5% |
+| EMA 21/55 cross, trailing SL 15% | 1d | 16 | 38 | +29.4% | 26.7% |
+| EMA 21/55 cross, ATR 3× trailing (BTC+ETH+SOL, 33%) | 4h | 153 | 37 | **+15.3%** | 26.3% |
+| EMA 20/50 cross, ATR 3× trailing (3 pairs) | 4h | 170 | 38 | +12.3% | 29.5% |
+| EMA 21/55 cross, ATR 3× trailing (BTC+ETH, 50%) | 4h | 105 | 36 | +10.5% | 34.4% |
+| Supertrend(10, 3) flip (3 pairs, 33%) | 4h | 202 | 35 | +19.3% | — |
+| MACD hist cross 0 + `close > ema200`, trailing 12% | 1d | 32 | 25 | −22.5% | 34.0% |
+| Pullback: `close cross_above ema20` + ema200 + ADX>20, ATR 3× SL, TP 8%/50% | 4h | 174 | 28 | −11.5% | 20.6% |
+| Same pullback, 4h short window | 4h | 45 | 22 | −12.0% | — |
+| RSI cross_above 35 + ema200, SL 5%, TP 8% (3 pairs) | 4h | 51 | 31 | −19.8% | — |
+| Bollinger lower-band re-entry + ADX<25, TP 3%, SL 2.5% (Coinbase 0.25% fee) | 1h | 81 | 59 | −18.6% | 15.1% |
+| Same, exit at upper band | 1h | 71 | 52 | −16.1% | — |
+| Same on Binance 4h, TP 6%, SL 4% | 4h | 81 | 59 | −18.6% | — |
 
----
+Take-aways: (1) simple trend following with an opposite-signal exit works across every parameter neighbour → not curve-fit; (2) it returns roughly half of buy & hold with well under half the drawdown — that is the honest pitch, do not promise more; (3) every "smart" addition (EMA200 filter, extra pairs, pullback entries, mean reversion, tight targets) made results worse; (4) win rates are 35–55% — a good strategy here loses more often than it wins and pays for it with large winners. Tell the user this so they don't switch it off after four losses.
 
-### 5. Action Node (Order Routing)
+### 4.10 Output checklist (do this before answering)
 
-Executes a trade when its logic input resolves to true.
-
-**Settings per action:**
-- **Direction**: `BUY` (open long) or `SELL` (close position)
-- **Order type**: `Market` or `Limit`
-- **Entry size**: percentage of capital or fixed amount
-- **Slippage %**: expected slippage for backtesting (default 0.05%)
-- **Trading fee %**: expected fee for backtesting (default 0.1%)
-
-**Connection points:**
-- **Left (logic input)**: connect from a condition or logic gate — this is the trigger
-- **Right (TP output)**: connect to Take Profit nodes
-- **Right (SL output)**: connect to Stop Loss nodes
+1. One strategy family; regime filter (state) + trigger (event) + exit plan + SL tier + guards.
+2. Every param id and output_idx matches §2.2; every operator matches §2.4; timeframe matches §5.3 for the chosen `data_exchange`.
+3. Fee/slippage set to the exchange's real numbers; expected move per trade ≥ 3–5× round-trip cost.
+4. SL/TP sized for the timeframe (§4.4); reward:risk ≥ 1.5 if both are fixed.
+5. `backtest_lookback` covers several regimes and the exchange has that history; longest indicator length ≤ lookback / 10.
+6. `is_sandbox: true`, `api_execution: false`, `api_key_name: null`, `max_order_value` present.
+7. After the JSON, tell the user in 3–5 lines: what regime it targets, what the failure mode is, what to look for in the backtest (trade count, PF, DD vs. B&H), and that it must forward-test first. If the request cannot be expressed (shorting, multi-timeframe in one graph, time-of-day rules), say so instead of approximating.
 
 ---
 
-### 6. Risk Management Nodes
+## 5. Bot import file format (`.apex.json`)
 
-#### Stop Loss
-- **Trigger types**: Percentage (%), Trailing (%), ATR Trailing (multiplier), Fixed Price
-- **Close amount**: percentage of position or fixed amount
-- Multiple stop losses can be attached to one entry action (tiered exits)
+Output exactly **one** valid JSON document in a fenced code block. Use only methods, operators and field names from this document — the backend validates on import and rejects unknown methods, unsupported timeframes, invalid operators and negative offsets. Give nodes short descriptive ids (`ema200`, `entry_gate`). Set `ui_layout` to `{"nodes": [], "edges": []}` — the editor rebuilds the layout. Duplicate names are auto-renamed on import; validation errors come back as a list — fix and re-emit.
 
-#### Take Profit
-- **Trigger types**: Percentage (%), Trailing (%), ATR Trailing (multiplier), Fixed Price
-- **Close amount**: percentage of position or fixed amount
-- Multiple take profits can be attached to one entry action (scale-out targets)
-
-**Tiered exit example**: TP1 at 2% closing 50%, TP2 at 5% closing 100%. SL at 1.5% closing 100%.
-
----
-
-## How to Wire a Strategy
-
-### Basic Pattern
-```
-[Indicator A] ──> [Condition: A > 30] ──> [Action: BUY]
-                                                ├──> [Take Profit: 3%]
-                                                └──> [Stop Loss: 1.5%]
-```
-
-### Multi-Condition Pattern
-```
-[RSI(14)] ──────────> [Condition: RSI < 30] ──┐
-                                               ├──> [Logic: AND] ──> [Action: BUY]
-[EMA(20)] ──> [Condition: Price > EMA] ───────┘
-[Price Close] ─┘
-```
-
-### Full Strategy Pattern
-```
-ENTRY SIDE:
-[Indicator 1] ──> [Condition 1] ──┐
-                                   ├──> [Logic: AND] ──> [Action: BUY] ──> [TP1: 2% close 50%]
-[Indicator 2] ──> [Condition 2] ──┘                           │         ──> [TP2: 5% close 100%]
-                                                              │         ──> [SL: Trailing 1.5%]
-EXIT SIDE:
-[Indicator 3] ──> [Condition 3] ──> [Action: SELL (100%)]
-```
-
----
-
-## Strategy Design Rules
-
-1. **Every strategy needs at minimum**: Main Configuration + Asset Whitelist + at least one Action node with a connected logic chain
-2. **Indicators cannot connect directly to actions** — they must pass through a Condition node first
-3. **Conditions need at least Input A** — Input B can be another node or a static number
-4. **Logic gates are optional** — a single condition can connect directly to an action
-5. **Multiple logic gates can chain together** for complex conditions (e.g. AND -> OR -> action)
-6. **You need separate action nodes for entry and exit** — one set to BUY, one set to SELL
-7. **Strategy-based exits are optional** — if you only use TP/SL, you don't need a SELL action node
-8. **TP and SL nodes connect to the BUY action** (the entry), not to sell actions
-9. **Backtest node is optional** — without it, the bot only trades live candles
-10. **Exchange Routing node is optional** — without it, the bot runs in forward-test mode (local simulation)
-11. **If an API key is selected in the Exchange Routing node**, the exchange and sandbox/live mode are derived automatically from that key. Do not specify the exchange separately.
-12. **If no API key is selected**, choose a Data Exchange from the dropdown for market data. The bot will not place real orders.
-
----
-
-## Example Prompt for AI Strategy Design
-
-> "Design me an ApexAlgo strategy for BTC/USDT on the 15m timeframe. I want to enter long when RSI(14) crosses below 30 AND the price is above the EMA(200). Take profit in two stages: 50% at 2% profit and the rest at 5%. Use a 1.5% trailing stop loss. Max 2 concurrent positions, cooldown of 1 entry per 10 candles. Backtest with 500 candles and $10,000 capital."
-
-The AI should respond with:
-- Exact node types to place on the canvas
-- Indicator parameters to set
-- Condition operators and values
-- How to wire/connect the nodes
-- Risk management settings
-- Configuration values
-
----
-
-## Tips for Prompting
-
-- **Be specific about timeframe** — it affects indicator behavior significantly
-- **Specify entry AND exit logic** — or state that you only want TP/SL exits
-- **Mention your risk tolerance** — helps size TP/SL levels appropriately
-- **State the market type** — trending, ranging, or volatile markets need different approaches
-- **Ask for multiple timeframe confirmation** — e.g. "only enter if the 1h trend is up" (requires multiple bots or manual confirmation, since each bot uses one timeframe)
-- **Request the exact wiring** — ask the AI to describe which node connects to which input (left/right, in1/in2, logic/tp/sl)
-- **Specify the exchange** — if not using an API key, mention which exchange to pull data from (OKX, Binance, Kraken, etc.)
-- **Timeframes are exchange-specific** — Coinbase does NOT support `4h` (use `6h` or `2h`). OKX and Binance support `4h`. Always check the exchange's supported timeframes.
-
----
-
-## Bot Import File Format (`.apex.json`)
-
-AI assistants can generate `.apex.json` files that users import directly into ApexAlgo (Bot Manager → Import). The format must match exactly.
-
-**Instructions when you are the AI generating a strategy:** output exactly one valid JSON document in a fenced code block, nothing else appended inside it. Use only indicator methods, operators and field names from this document — the backend validates on import and rejects unknown methods, unsupported timeframes, invalid operators and negative price-data offsets. Give every node a short descriptive id (e.g. `rsi14`, `entry_gate`). Set `ui_layout` to `{"nodes": [], "edges": []}`; the visual editor rebuilds the layout automatically. Default to `"is_sandbox": true`, `"api_execution": false` and `"api_key_name": null` so the strategy always arrives in safe simulation mode. If the requested strategy needs something this format cannot express (e.g. shorting, multi-timeframe logic in one graph), say so instead of approximating silently.
-
-**Import behavior:** if a bot with the same name already exists, the import is auto-renamed ("(imported)", "(imported) 2", …). Validation errors are returned as a list and the import is rejected — fix and re-emit the JSON.
-
-**Verified reference examples** live in the repository under `examples/`: `RSI_Dip_Hunter.apex.json` (RSI mean-reversion with EMA trend filter, fixed SL/TP), `EMA_Trend_Rider.apex.json` (EMA cross with trailing stop, multi-pair), `Bollinger_Bounce.apex.json` (band bounce with trend filter and logic gate). All three import and backtest cleanly — mirror their structure.
-
-### File Structure
+### 5.1 File structure
 
 ```json
 {
   "apex_version": "1.0",
-  "exported_at": "2026-04-05T12:00:00Z",
+  "exported_at": "2026-09-09T12:00:00Z",
   "bot": {
     "name": "Strategy Name",
     "is_sandbox": true,
@@ -304,256 +296,292 @@ AI assistants can generate `.apex.json` files that users import directly into Ap
     "settings": {
       "symbol": "BTC/USDC",
       "symbols": ["BTC/USDC", "ETH/USDC"],
-      "timeframe": "1h",
-      "max_positions": 1,
-      "max_positions_scope": "per_pair",
-      "cooldown_trades": 0,
-      "cooldown_candles": 0,
-      "max_drawdown": 0,
-      "drawdown_action": "close_all",
-      "max_capital_loss": 0,
+      "timeframe": "4h",
+      "max_positions": 2,
+      "max_positions_scope": "global",
+      "cooldown_trades": 1,
+      "cooldown_candles": 3,
+      "max_drawdown": 20,
+      "drawdown_action": "block_entries",
       "drawdown_cooldown_days": 7,
-      "max_order_value": 0,
+      "max_capital_loss": 30,
+      "max_order_value": 250,
       "live_allocation_pct": 100,
       "api_execution": false,
       "backtest_on_start": true,
       "backtest_capital": 1000,
-      "backtest_lookback": 500,
+      "backtest_lookback": 1500,
       "api_key_name": null,
-      "data_exchange": "okx",
-      "trade_settings": { ... },
-      "nodes": { ... },
+      "data_exchange": "binance",
+      "trade_settings": { "...": "see 5.4" },
+      "nodes": { "...": "see 5.5" },
       "ui_layout": { "nodes": [], "edges": [] },
-      "entry_node": "node_id_ref",
-      "exit_node": "node_id_ref"
+      "entry_node": "entry_gate",
+      "exit_node": "exit_signal"
     }
   }
 }
 ```
 
-### Settings Fields
+### 5.2 Settings fields
 
 | Field | Type | Description |
-|-------|------|-------------|
+|---|---|---|
 | `symbol` | string | Primary symbol (first in whitelist) |
-| `symbols` | string[] | All trading pairs |
-| `timeframe` | string | Candle interval — must be supported by `data_exchange` |
-| `max_positions` | int | Max concurrent open positions (>= 1) |
-| `max_positions_scope` | `"per_pair"` or `"global"` | Position limit scope |
-| `cooldown_trades` | int | Max new entries per cooldown window (0 = off) |
-| `cooldown_candles` | int | Cooldown window size in candles |
-| `max_drawdown` | number | Drawdown limit in % (0 = off). Measured peak-to-trough on the mark-to-market equity curve (cash + open positions), evaluated after the backtest and after every closed live position. What happens on breach is set by `drawdown_action`. |
-| `drawdown_action` | `"close_all"` (default) or `"block_entries"` | `close_all`: close every open position and stop the bot (a backtest breach prevents going live). `block_entries`: keep running, skip new entries until drawdown recovers below half the limit — or, once the bot is flat, until `drawdown_cooldown_days` have passed, after which the equity peak is reset and a new drawdown campaign starts; exits, stop-losses and take-profits keep working throughout. The backtest simulates the same rule. Does not cap losses on open positions — pair it with `max_capital_loss`. Optional; missing key = `close_all`. |
-| `drawdown_cooldown_days` | number 0–365 | Only for `block_entries`: how long the bot must stay flat (no open positions) while blocked before entries resume from a fresh peak. Default 7; 0 = resume as soon as flat. Without a reset, realized equity could never recover and the block would be permanent. |
-| `max_capital_loss` | number | Hard stop in % of starting capital (0 = off): `(start_capital - equity) / start_capital`. Independent of `max_drawdown`. `drawdown_action` applies here too: `close_all` market-closes everything and stops immediately; `block_entries` winds the bot down — no new entries ever again, open positions finish via their exits, then the bot stops. Required (> 0) for live bots that use `block_entries`. |
-| `max_order_value` | number | Max USD per live order (0 = off) |
-| `live_allocation_pct` | number 1–100 | Paper/live only: share of the exchange wallet (free quote balance + capital deployed by all bots on the same API key) this bot may deploy. Entry sizing runs against `allocation − already deployed by this bot`, so several bots can share one key by splitting the percentage (e.g. 40/60). Default 100. `backtest_capital` is ignored for live sizing; the wallet snapshot at go-live is stored as `live_starting_capital` and used as the base for live drawdown/capital-loss guards. |
-| `api_execution` | bool | `true` for live/paper via API key |
-| `backtest_on_start` | bool | Run backtest when bot starts |
-| `backtest_capital` | number | Starting capital for backtest (USD) |
-| `backtest_lookback` | int | Number of historical candles to backtest |
-| `api_key_name` | string/null | Name of saved API key (null = no key) |
-| `data_exchange` | string | Exchange for market data: `okx`, `binance`, `bitvavo`, `coinbase`, `cryptocom`, `kraken`, `kucoin` |
+| `symbols` | string[] | All pairs; one quote currency per bot |
+| `timeframe` | string | Must be supported by `data_exchange` (§5.3) |
+| `max_positions` | int ≥ 1 | Open positions allowed; with `global`, across all pairs |
+| `max_positions_scope` | `per_pair` / `global` | Scope of the limit |
+| `cooldown_trades` / `cooldown_candles` | int | Max new entries per window (0 = off) |
+| `max_drawdown` | % | Peak-to-trough on mark-to-market equity, checked after the backtest and after every closed live position. 0 = off |
+| `drawdown_action` | `close_all` / `block_entries` | `close_all`: close everything and stop (a backtest breach prevents go-live). `block_entries`: skip new entries until drawdown < half the limit, or — once flat — until `drawdown_cooldown_days` passed; then the peak resets. Exits keep working. Simulated in the backtest too |
+| `drawdown_cooldown_days` | 0–365 | Flat time before entries resume under `block_entries` (default 7) |
+| `max_capital_loss` | % | Hard stop on loss of starting capital, independent of drawdown. With `block_entries` the bot winds down (no entries, exits finish, then stops). Required > 0 for live bots using `block_entries` |
+| `max_order_value` | USD | Cap per live order (0 = off; required > 0 for live) |
+| `live_allocation_pct` | 1–100 | Paper/live: share of the exchange wallet (free quote + deployed by all bots on the key) this bot may deploy; split it between bots sharing a key. Snapshot at go-live becomes `live_starting_capital`, the base for live guards |
+| `api_execution` | bool | `true` = orders via API key |
+| `backtest_on_start` / `backtest_capital` / `backtest_lookback` | bool / USD / candles | Backtest settings |
+| `api_key_name` | string/null | Saved key name (null = forward test) |
+| `data_exchange` | string | `okx` `binance` `bitvavo` `coinbase` `cryptocom` `kraken` `kucoin` |
 
-### Exchange Timeframe Compatibility
+### 5.3 Exchange timeframes and history
 
-Not all exchanges support all timeframes. The system validates this on import.
+| Exchange | Timeframes | History |
+|---|---|---|
+| OKX | `1m 3m 5m 15m 30m 1h 2h 4h 6h 12h 1d 1w 1M` | full since listing (USDC pairs listed Aug 2025) |
+| Binance | `1m 3m 5m 15m 30m 1h 2h 4h 6h 8h 12h 1d 3d 1w 1M` | full |
+| Coinbase | `1m 5m 15m 30m 1h 2h 6h 1d` (**no 4h**) | full |
+| Kraken | `1m 5m 15m 30m 1h 4h 1d 1w` | **only the last 720 candles** per timeframe |
+| Bitvavo | `1m 5m 15m 30m 1h 2h 4h 6h 8h 12h 1d` | full |
+| KuCoin | `1m 3m 5m 15m 30m 1h 2h 4h 6h 8h 12h 1d 1w` | full |
+| Crypto.com | `1m 5m 15m 30m 1h 2h 4h 6h 12h 1d 1w` | full since listing |
 
-| Exchange | Supported Timeframes |
-|----------|---------------------|
-| OKX | `1m`, `3m`, `5m`, `15m`, `30m`, `1h`, `2h`, `4h`, `6h`, `12h`, `1d`, `1w`, `1M` |
-| Binance | `1m`, `3m`, `5m`, `15m`, `30m`, `1h`, `2h`, `4h`, `6h`, `8h`, `12h`, `1d`, `3d`, `1w`, `1M` |
-| Coinbase | `1m`, `5m`, `15m`, `30m`, `1h`, `2h`, `6h`, `1d` |
-| Kraken | `1m`, `5m`, `15m`, `30m`, `1h`, `4h`, `1d`, `1w` |
-| Bitvavo | `1m`, `5m`, `15m`, `30m`, `1h`, `2h`, `4h`, `6h`, `8h`, `12h`, `1d` |
-| KuCoin | `1m`, `3m`, `5m`, `15m`, `30m`, `1h`, `2h`, `4h`, `6h`, `8h`, `12h`, `1d`, `1w` |
+For long daily backtests prefer Binance or Coinbase data; for Kraken use ≤ 720 candles.
 
-### Node Definitions (`settings.nodes`)
-
-Each node has a unique ID (key) and a definition object. Nodes reference each other by ID.
-
-**Indicator node:**
-```json
-"n_rsi": {
-  "class": "indicator",
-  "method": "rsi",
-  "params": { "length": 14 },
-  "output_idx": 0
-}
-```
-- `method`: indicator key from the tables above (e.g. `rsi`, `ema`, `bbands`, `supertrend`). **The backend enforces an allowlist** — any method outside the tables above is rejected on import with a validation error, so never invent method names.
-- `params`: parameter object matching the indicator's parameter IDs and values
-- `output_idx`: which output column to use (0 = first). For single-line indicators always use `0`. For multi-line indicators the exact column order is:
-
-| Method | output_idx → column |
-|---|---|
-| `macd` | 0 = MACD line, 1 = histogram, 2 = signal line |
-| `bbands` | 0 = lower band, 1 = middle band, 2 = upper band, 3 = bandwidth, 4 = percent |
-| `stoch` | 0 = %K, 1 = %D |
-| `stochrsi` | 0 = %K, 1 = %D |
-| `supertrend` | 0 = trend value, 1 = direction (+1/−1), 2 = long band, 3 = short band |
-| `adx` | 0 = ADX, 1 = +DI, 2 = −DI |
-| `kc` (Keltner) | 0 = lower, 1 = basis, 2 = upper |
-| `donchian` | 0 = lower, 1 = middle, 2 = upper |
-| `accbands` | 0 = lower, 1 = middle, 2 = upper |
-| `fisher` | 0 = fisher, 1 = signal |
-| `ppo` | 0 = PPO line, 1 = histogram, 2 = signal |
-| `tsi` | 0 = TSI, 1 = signal |
-| `ichimoku` | 0 = senkou span A, 1 = senkou span B, 2 = tenkan, 3 = kijun. **Index 4 (chikou) is intentionally disabled** (it is a look-ahead value) and always returns no data — never use it. |
-
-**Price data node:**
-```json
-"n_close": {
-  "class": "price_data",
-  "type": "close",
-  "offset": 0
-}
-```
-- `type`: `open`, `high`, `low`, `close`, or `volume`
-- `offset`: number of candles **back**: `0` = current candle, `1` = previous candle, `2` = two candles ago. **Never use negative offsets** — they would reference future candles (look-ahead) and are rejected on import.
-
-**Condition node:**
-```json
-"c_uptrend": {
-  "class": "condition",
-  "left": "n_close",
-  "operator": ">",
-  "right": "n_ema200"
-}
-```
-- `left`: node ID reference (Input A)
-- `operator`: comparison operator (see operator table above)
-- `right`: node ID reference (Input B) OR a static number (e.g. `30`, `70`, `-1`)
-
-**Logic gate node:**
-```json
-"g_entry": {
-  "class": "logic",
-  "operator": "and",
-  "left": "c_uptrend",
-  "right": "c_oversold"
-}
-```
-- `operator`: `and`, `or`, `xor`, `nand`, `nor`, `not`
-- `left`/`right`: node ID references. For `not`, only `left` is used.
-- Logic gates can reference other logic gates for complex chains.
-
-### Trade Settings (`settings.trade_settings`)
+### 5.4 Trade settings
 
 ```json
 "trade_settings": {
   "entry": {
     "order_type": "market",
     "amount_type": "percentage",
-    "amount_value": 25,
-    "fee": 0.06,
-    "slippage": 0.025,
+    "amount_value": 50,
+    "fee": 0.1,
+    "slippage": 0.05,
     "take_profits": [
-      { "type": "percentage", "value": 4.0, "close_amount_type": "percentage", "close_amount_value": 50 },
-      { "type": "percentage", "value": 8.0, "close_amount_type": "percentage", "close_amount_value": 100 }
+      { "type": "percentage", "value": 8.0, "close_amount_type": "percentage", "close_amount_value": 50 }
     ],
     "stop_losses": [
-      { "type": "trailing", "value": 2.0, "close_amount_type": "percentage", "close_amount_value": 100 }
+      { "type": "atr", "value": 3.0, "close_amount_type": "percentage", "close_amount_value": 100 }
     ]
   },
-  "exit": {
-    "order_type": "market",
-    "amount_type": "percentage",
-    "amount_value": 100,
-    "fee": 0.06,
-    "slippage": 0.025
-  }
+  "exit": { "order_type": "market", "amount_type": "percentage", "amount_value": 100, "fee": 0.1, "slippage": 0.05 }
 }
 ```
 
-- `amount_type`: `"percentage"` (% of capital) or `"fixed"` (fixed USD)
-- `fee`/`slippage`: percentages as decimals (0.06 = 0.06%)
-- TP/SL `type`: `"percentage"`, `"trailing"`, `"atr"`, or `"fixed"`
-- TP/SL `close_amount_type`: `"percentage"` or `"fixed"`
+`fee`/`slippage` are percentages (`0.1` = 0.1%). `amount_type` `percentage` (% of available cash) or `fixed` (USD). TP/SL semantics in §2.6.
 
-### Entry/Exit Node References
+### 5.5 Node definitions
 
 ```json
-"entry_node": "g_entry",
-"exit_node": "c_overbought"
+"ema200":     { "class": "indicator", "method": "ema", "params": { "length": 200 }, "output_idx": 0 },
+"st_dir":     { "class": "indicator", "method": "supertrend", "params": { "length": 10, "multiplier": 3.0 }, "output_idx": 1 },
+"close":      { "class": "price_data", "type": "close", "offset": 0 },
+"prev_high":  { "class": "price_data", "type": "high", "offset": 1 },
+"uptrend":    { "class": "condition", "left": "close", "operator": ">", "right": "ema200" },
+"st_up":      { "class": "condition", "left": "st_dir", "operator": "==", "right": 1 },
+"trigger":    { "class": "condition", "left": "close", "operator": "cross_above", "right": "ema20" },
+"entry_gate": { "class": "logic", "operator": "and", "left": "uptrend", "right": "trigger" }
 ```
 
-These point to the final node in the logic chain that triggers the BUY/SELL action. The entry_node feeds into the BUY action, exit_node into the SELL action.
+`entry_node` / `exit_node` point at the final node of each chain (the BUY and SELL triggers). `exit_node` is optional when TP/SL do all the exiting.
 
-### UI Layout
+---
 
-```json
-"ui_layout": { "nodes": [], "edges": [] }
-```
+## 6. Vetted templates
 
-Set to empty arrays for programmatic/AI-generated bots. ApexAlgo automatically reconstructs the visual layout when opening the editor. If you export a bot that was built in the visual editor, this field contains the full ReactFlow node positions and edge connections.
+Three complete files, all imported and backtested in the real engine (results in §4.9). Adapt pairs, fee and sizes; keep the structure. Each is deliberately minimal — every addition we tried made them worse.
 
-### Complete Example: RSI Oversold + EMA Trend Filter
+### 6.1 Supertrend trend follower — 1d, flip in / flip out, 15% disaster trail
+
+Backtest Dec 2023 → Sep 2026, BTC+ETH: **+28.8%, max DD 32.0%, 26 trades, 42% win rate** (buy & hold: +49.5% / 58.6% DD).
 
 ```json
 {
   "apex_version": "1.0",
-  "exported_at": "2026-04-05T12:00:00Z",
+  "exported_at": "2026-09-09T12:00:00Z",
   "bot": {
-    "name": "RSI Oversold Trend Entry",
+    "name": "Supertrend Trend 1d",
     "is_sandbox": true,
     "strategy": "node_evaluator",
     "settings": {
       "symbol": "BTC/USDC",
       "symbols": ["BTC/USDC", "ETH/USDC"],
-      "timeframe": "1h",
-      "max_positions": 1,
-      "max_positions_scope": "per_pair",
+      "timeframe": "1d",
+      "max_positions": 2,
+      "max_positions_scope": "global",
       "cooldown_trades": 1,
-      "cooldown_candles": 4,
-      "max_drawdown": 10,
-      "max_order_value": 0,
+      "cooldown_candles": 5,
+      "max_drawdown": 35,
+      "drawdown_action": "block_entries",
+      "drawdown_cooldown_days": 14,
+      "max_capital_loss": 40,
+      "max_order_value": 250,
+      "live_allocation_pct": 100,
       "api_execution": false,
       "backtest_on_start": true,
       "backtest_capital": 1000,
-      "backtest_lookback": 5000,
+      "backtest_lookback": 1000,
       "api_key_name": null,
-      "data_exchange": "coinbase",
+      "data_exchange": "binance",
       "trade_settings": {
         "entry": {
-          "order_type": "market",
-          "amount_type": "percentage",
-          "amount_value": 25,
-          "fee": 0.06,
-          "slippage": 0.025,
-          "take_profits": [
-            { "type": "percentage", "value": 3.0, "close_amount_type": "percentage", "close_amount_value": 50 },
-            { "type": "percentage", "value": 6.0, "close_amount_type": "percentage", "close_amount_value": 100 }
-          ],
+          "order_type": "market", "amount_type": "percentage", "amount_value": 50,
+          "fee": 0.1, "slippage": 0.05,
+          "take_profits": [],
           "stop_losses": [
-            { "type": "trailing", "value": 2.0, "close_amount_type": "percentage", "close_amount_value": 100 }
+            { "type": "trailing", "value": 15.0, "close_amount_type": "percentage", "close_amount_value": 100 }
           ]
         },
-        "exit": {
-          "order_type": "market",
-          "amount_type": "percentage",
-          "amount_value": 100,
-          "fee": 0.06,
-          "slippage": 0.025
-        }
+        "exit": { "order_type": "market", "amount_type": "percentage", "amount_value": 100, "fee": 0.1, "slippage": 0.05 }
       },
       "nodes": {
-        "n_ema200": { "class": "indicator", "method": "ema", "params": { "length": 200 }, "output_idx": 0 },
-        "n_rsi": { "class": "indicator", "method": "rsi", "params": { "length": 14 }, "output_idx": 0 },
-        "n_close": { "class": "price_data", "type": "close", "offset": 0 },
-        "c_uptrend": { "class": "condition", "left": "n_close", "operator": ">", "right": "n_ema200" },
-        "c_oversold": { "class": "condition", "left": "n_rsi", "operator": "<", "right": 30 },
-        "g_entry": { "class": "logic", "operator": "and", "left": "c_uptrend", "right": "c_oversold" },
-        "c_overbought": { "class": "condition", "left": "n_rsi", "operator": ">", "right": 70 }
+        "st_dir":    { "class": "indicator", "method": "supertrend", "params": { "length": 10, "multiplier": 3.0 }, "output_idx": 1 },
+        "flip_up":   { "class": "condition", "left": "st_dir", "operator": "cross_above", "right": 0 },
+        "flip_down": { "class": "condition", "left": "st_dir", "operator": "cross_below", "right": 0 }
       },
       "ui_layout": { "nodes": [], "edges": [] },
-      "entry_node": "g_entry",
-      "exit_node": "c_overbought"
+      "entry_node": "flip_up",
+      "exit_node": "flip_down"
     }
   }
 }
 ```
 
-**Logic flow:**
-- Entry: Price > EMA(200) AND RSI(14) < 30 → BUY 25% of capital → TP1 at 3% (close 50%), TP2 at 6% (close 100%) → SL trailing 2%
-- Exit: RSI(14) > 70 → SELL 100% of position
+The Supertrend direction line is +1/−1; crossing 0 is the flip. Buys the day the trend turns up, sells the day it turns down; the 15% trail only matters in a crash between daily closes. Fails in months-long chop (several −3…−8% flips in a row) — that is where the 32% drawdown comes from. Neighbours (10/2.5, 14/4, no stop) all made +21…+30%, so the parameters are not fragile.
+
+### 6.2 Donchian channel breakout — 1d, new 55-day high in, new 20-day low out
+
+Backtest Dec 2023 → Sep 2026, BTC+ETH: **+23.7%, max DD 23.7%, 21 trades, 52% win rate**. Neighbours: 55/10 +37.6%, 40/20 +17.0%.
+
+```json
+{
+  "apex_version": "1.0",
+  "exported_at": "2026-09-09T12:00:00Z",
+  "bot": {
+    "name": "Donchian Breakout 1d",
+    "is_sandbox": true,
+    "strategy": "node_evaluator",
+    "settings": {
+      "symbol": "BTC/USDC",
+      "symbols": ["BTC/USDC", "ETH/USDC"],
+      "timeframe": "1d",
+      "max_positions": 2,
+      "max_positions_scope": "global",
+      "cooldown_trades": 1,
+      "cooldown_candles": 5,
+      "max_drawdown": 30,
+      "drawdown_action": "block_entries",
+      "drawdown_cooldown_days": 14,
+      "max_capital_loss": 35,
+      "max_order_value": 250,
+      "live_allocation_pct": 100,
+      "api_execution": false,
+      "backtest_on_start": true,
+      "backtest_capital": 1000,
+      "backtest_lookback": 1000,
+      "api_key_name": null,
+      "data_exchange": "binance",
+      "trade_settings": {
+        "entry": {
+          "order_type": "market", "amount_type": "percentage", "amount_value": 50,
+          "fee": 0.1, "slippage": 0.05,
+          "take_profits": [],
+          "stop_losses": [
+            { "type": "trailing", "value": 15.0, "close_amount_type": "percentage", "close_amount_value": 100 }
+          ]
+        },
+        "exit": { "order_type": "market", "amount_type": "percentage", "amount_value": 100, "fee": 0.1, "slippage": 0.05 }
+      },
+      "nodes": {
+        "dc_upper55":   { "class": "indicator", "method": "donchian", "params": { "lower_length": 55, "upper_length": 55 }, "output_idx": 2 },
+        "dc_lower20":   { "class": "indicator", "method": "donchian", "params": { "lower_length": 20, "upper_length": 20 }, "output_idx": 0 },
+        "new_55d_high": { "class": "condition", "left": "dc_upper55", "operator": "increasing" },
+        "new_20d_low":  { "class": "condition", "left": "dc_lower20", "operator": "decreasing" }
+      },
+      "ui_layout": { "nodes": [], "edges": [] },
+      "entry_node": "new_55d_high",
+      "exit_node": "new_20d_low"
+    }
+  }
+}
+```
+
+Classic turtle logic. The channel *includes* the current candle, so `close > upper` can never be true — a breakout is expressed as the channel top `increasing` (a new 55-day high was set today). Enters late and exits late by design; the win rate is the highest of the three because it only trades established trends. Expect 6–10 trades per pair per year.
+
+### 6.3 EMA cross with ATR trail — 4h, the more active option
+
+Backtest Dec 2023 → Sep 2026, BTC+ETH+SOL at 33%: **+15.3%, max DD 26.3%, 153 trades, 37% win rate**. Neighbours: 20/50 +12.3%; BTC+ETH only +10.5%.
+
+```json
+{
+  "apex_version": "1.0",
+  "exported_at": "2026-09-09T12:00:00Z",
+  "bot": {
+    "name": "EMA Cross 4h",
+    "is_sandbox": true,
+    "strategy": "node_evaluator",
+    "settings": {
+      "symbol": "BTC/USDC",
+      "symbols": ["BTC/USDC", "ETH/USDC", "SOL/USDC"],
+      "timeframe": "4h",
+      "max_positions": 3,
+      "max_positions_scope": "global",
+      "cooldown_trades": 1,
+      "cooldown_candles": 5,
+      "max_drawdown": 30,
+      "drawdown_action": "block_entries",
+      "drawdown_cooldown_days": 7,
+      "max_capital_loss": 35,
+      "max_order_value": 250,
+      "live_allocation_pct": 100,
+      "api_execution": false,
+      "backtest_on_start": true,
+      "backtest_capital": 1000,
+      "backtest_lookback": 6000,
+      "api_key_name": null,
+      "data_exchange": "binance",
+      "trade_settings": {
+        "entry": {
+          "order_type": "market", "amount_type": "percentage", "amount_value": 33,
+          "fee": 0.1, "slippage": 0.05,
+          "take_profits": [],
+          "stop_losses": [
+            { "type": "atr", "value": 3.0, "close_amount_type": "percentage", "close_amount_value": 100 }
+          ]
+        },
+        "exit": { "order_type": "market", "amount_type": "percentage", "amount_value": 100, "fee": 0.1, "slippage": 0.05 }
+      },
+      "nodes": {
+        "ema21":       { "class": "indicator", "method": "ema", "params": { "length": 21 }, "output_idx": 0 },
+        "ema55":       { "class": "indicator", "method": "ema", "params": { "length": 55 }, "output_idx": 0 },
+        "golden_cross": { "class": "condition", "left": "ema21", "operator": "cross_above", "right": "ema55" },
+        "death_cross":  { "class": "condition", "left": "ema21", "operator": "cross_below", "right": "ema55" }
+      },
+      "ui_layout": { "nodes": [], "edges": [] },
+      "entry_node": "golden_cross",
+      "exit_node": "death_cross"
+    }
+  }
+}
+```
+
+Roughly one trade per pair per week. The ATR 3× trailing stop (≈ 4–7% on 4h) closes most trades — 134 of 153 exits were the trail, at +0.9% average — while the death cross only catches slow rolls. Lower return than the daily systems but shallower single-trade losses and faster feedback for a forward test. Run at least 6 000 candles; a 2 000-candle window covers one regime only.
+
+---
+
+## 7. Example prompt
+
+> "Design an ApexAlgo strategy for BTC/USDC and ETH/USDC on Binance. I want a daily trend follower: buy when the trend turns up, sell when it turns down, with a wide disaster stop. 50% of capital per pair, drawdown guard 35% with block_entries and capital loss 40%. 1000 candles backtest, $1000, fee 0.1%. Output the `.apex.json` and tell me what to check in the backtest."
+
+The reply should be one JSON block that passes the checklist in §4.10, followed by a short note on regime, failure mode and what to verify before forward testing — including that a good trend follower loses more trades than it wins.
