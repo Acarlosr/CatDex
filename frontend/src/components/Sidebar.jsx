@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import { getTheme, setTheme } from '../theme';
+import { useLanguage } from '../i18n.jsx';
+import LanguageSelector from './LanguageSelector';
 
 const NAV_ITEMS = [
   {
     key: 'settings',
-    label: 'Exchange Setup',
+    labelKey: 'nav.settings',
     icon: (
       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
@@ -13,7 +15,7 @@ const NAV_ITEMS = [
   },
   {
     key: 'bots',
-    label: 'Algorithms',
+    labelKey: 'nav.bots',
     icon: (
       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
@@ -22,7 +24,7 @@ const NAV_ITEMS = [
   },
   {
     key: 'manager',
-    label: 'Data Vault',
+    labelKey: 'nav.manager',
     icon: (
       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4 7v10c0 2 3.582 3 8 3s8-1 8-3V7M4 7c0 2 3.582 3 8 3s8-1 8-3M4 7c0-2 3.582-3 8-3s8 1 8 3m0 5c0 2-3.582 3-8 3s-8-1-8-3" />
@@ -31,10 +33,19 @@ const NAV_ITEMS = [
   },
   {
     key: 'trades',
-    label: 'Trade Analytics',
+    labelKey: 'nav.trades',
     icon: (
       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M16 8v8m-4-5v5m-4-2v2m-2 4h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+      </svg>
+    ),
+  },
+  {
+    key: 'howto',
+    labelKey: 'nav.howto',
+    icon: (
+      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
       </svg>
     ),
   },
@@ -42,6 +53,8 @@ const NAV_ITEMS = [
 
 export default function Sidebar({ activeView, setActiveView, openCharts, closeChart, runningBots, openBotChart, sidebarOpen, setSidebarOpen, backendOk = true, onLogout }) {
   const [theme, setThemeState] = useState(getTheme());
+  const { t } = useLanguage();
+  
   useEffect(() => {
     const sync = () => setThemeState(getTheme());
     window.addEventListener('apex-theme-changed', sync);
@@ -70,13 +83,11 @@ export default function Sidebar({ activeView, setActiveView, openCharts, closeCh
         <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-accent/20 to-transparent" />
         <div className="relative flex items-center gap-2.5">
           <div className="w-8 h-8 rounded-md bg-accent/10 border border-accent/30 flex items-center justify-center shrink-0 group-hover:shadow-glow-accent transition-shadow duration-300">
-            <svg className="w-4 h-4 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-            </svg>
+            <img src="/catdex-logo.svg" alt="CatDex" className="w-6 h-6" />
           </div>
           <div>
             <h1 className="text-base font-bold tracking-[0.2em] text-text leading-none">
-              APEX<span className="text-accent">ALGO</span>
+              CAT<span className="text-accent">DEX</span>
             </h1>
             <p className="text-faint text-[9px] mt-1 uppercase tracking-wider font-num">Engine Core</p>
           </div>
@@ -109,7 +120,7 @@ export default function Sidebar({ activeView, setActiveView, openCharts, closeCh
               <span className={`shrink-0 transition-colors duration-200 ${active ? 'text-accent' : 'text-faint group-hover:text-muted'}`}>
                 {item.icon}
               </span>
-              {item.label}
+              {t(item.labelKey)}
             </button>
           );
         })}
@@ -117,7 +128,7 @@ export default function Sidebar({ activeView, setActiveView, openCharts, closeCh
         {runningBots && runningBots.length > 0 && (
           <div className="pt-5 pb-2 px-3 flex items-center border-t border-border/50 mt-4">
             <span className="w-1.5 h-1.5 bg-success rounded-full mr-2 animate-pulse shadow-[0_0_12px_var(--color-success)]"></span>
-            <span className="text-[9px] font-bold text-faint uppercase tracking-[0.2em]">Live Engines</span>
+            <span className="text-[9px] font-bold text-faint uppercase tracking-[0.2em]">{t('bots.runningTitle')}</span>
           </div>
         )}
 
@@ -167,21 +178,22 @@ export default function Sidebar({ activeView, setActiveView, openCharts, closeCh
             {backendOk ? (
               <>
                 <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse shadow-[0_0_8px_var(--color-success)]" />
-                <span className="text-[9px] font-bold text-muted uppercase tracking-widest">Online</span>
+                <span className="text-[9px] font-bold text-muted uppercase tracking-widest">{t('status.online')}</span>
               </>
             ) : (
               <>
                 <span className="w-1.5 h-1.5 rounded-full bg-warn animate-pulse" />
-                <span className="text-[9px] font-bold text-warn uppercase tracking-widest">Reconnecting…</span>
+                <span className="text-[9px] font-bold text-warn uppercase tracking-widest">{t('status.reconnecting')}</span>
               </>
             )}
           </div>
           <div className="flex items-center gap-1.5">
+            <LanguageSelector />
             <span className="text-[9px] font-num text-faint">v1.0.0A</span>
             <button
               onClick={toggleTheme}
-              title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-              aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              title={theme === 'dark' ? t('theme.switchLight') : t('theme.switchDark')}
+              aria-label={theme === 'dark' ? t('theme.switchLight') : t('theme.switchDark')}
               className="p-1 rounded-md text-muted hover:text-accent hover:bg-overlay border border-transparent hover:border-border transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/70"
             >
               {theme === 'dark' ? (
@@ -198,8 +210,8 @@ export default function Sidebar({ activeView, setActiveView, openCharts, closeCh
             </button>
             <button
               onClick={onLogout}
-              title="Log out"
-              aria-label="Log out"
+              title={t('logout.button')}
+              aria-label={t('logout.button')}
               className="p-1 rounded-md text-muted hover:text-danger hover:bg-overlay border border-transparent hover:border-border transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/70"
             >
               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">

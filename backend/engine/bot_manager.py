@@ -26,7 +26,7 @@ from backend.core.encryption import decrypt_data
 from backend.core.exchange_registry import build_exchange_from_key, get_exchange_timeframes
 from backend.core import bot_log_buffer as blb
 
-logger = logging.getLogger("apexalgo.bot_manager")
+logger = logging.getLogger("catdex.bot_manager")
 
 VALID_EXIT_TYPES = {'percentage', 'trailing', 'atr', 'fixed'}
 

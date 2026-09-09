@@ -6,9 +6,9 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 
 load_dotenv(find_dotenv())
 
-logger = logging.getLogger("apexalgo.database")
+logger = logging.getLogger("catdex.database")
 
-SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/ApexAlgoDB.sqlite3")
+SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/CatDexDB.sqlite3")
 
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False, "timeout": 30}

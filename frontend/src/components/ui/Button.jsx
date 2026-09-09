@@ -1,5 +1,5 @@
 /**
- * Button — the only way to render a button in ApexAlgo views.
+ * Button — the only way to render a button in CatDex views.
  *
  * @param {object} props
  * @param {'primary'|'secondary'|'ghost'|'danger'|'success'} [props.variant='primary']

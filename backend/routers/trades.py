@@ -19,7 +19,7 @@ from backend.core.security import verify_api_key
 from backend.core.exchange_registry import build_exchange_from_key
 from backend.engine.bot_manager import bot_manager
 
-logger = logging.getLogger("apexalgo.trades")
+logger = logging.getLogger("catdex.trades")
 
 
 def _invalidate_drawdown_cache(bot_names):
@@ -431,4 +431,4 @@ def export_trades_csv(mode: str = "live", db: Session = Depends(get_db)):
             output.seek(0)
             output.truncate()
 
-    return StreamingResponse(generate(), media_type="text/csv", headers={"Content-Disposition": f"attachment; filename=apexalgo_{mode}_trades.csv"})
+    return StreamingResponse(generate(), media_type="text/csv", headers={"Content-Disposition": f"attachment; filename=catdex_{mode}_trades.csv"})

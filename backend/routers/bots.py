@@ -34,7 +34,7 @@ def _resolve_exchange(settings: dict, db: Session) -> str:
             return key.exchange
     return settings.get("data_exchange", "okx")
 
-logger = logging.getLogger("apexalgo.bots")
+logger = logging.getLogger("catdex.bots")
 
 router = APIRouter(
     prefix="/api/bots",

@@ -14,7 +14,7 @@ from backend.models.candles import Candle
 from backend.core.security import verify_api_key
 from backend.core.exchange_registry import build_exchange, SUPPORTED_EXCHANGES, get_exchange_timeframes
 
-logger = logging.getLogger("apexalgo.data")
+logger = logging.getLogger("catdex.data")
 
 # TTL cache for market-info responses (reduces exchange API calls)
 _ticker_cache: dict[str, tuple[float, dict]] = {}

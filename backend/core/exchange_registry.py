@@ -1,7 +1,7 @@
 import logging
 import ccxt
 
-logger = logging.getLogger("apexalgo.exchange_registry")
+logger = logging.getLogger("catdex.exchange_registry")
 
 # All exchanges supported by ApexAlgo. Key = ccxt exchange ID, Value = display name.
 SUPPORTED_EXCHANGES: dict[str, str] = {

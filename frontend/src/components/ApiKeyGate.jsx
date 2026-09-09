@@ -1,12 +1,14 @@
 import { useState } from 'react';
 import { login, API_BASE_URL } from '../api/client';
 import Button from './ui/Button';
+import { useLanguage } from '../i18n.jsx';
 
 export default function ApiKeyGate({ onUnlock, signedOutReason = null }) {
   const [keyInput, setKeyInput] = useState('');
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState(null);
   const [networkError, setNetworkError] = useState(false);
+  const { t } = useLanguage();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -22,7 +24,7 @@ export default function ApiKeyGate({ onUnlock, signedOutReason = null }) {
     } catch (err) {
       const status = err.response?.status;
       if (status === 401 || status === 403) {
-        setError('Invalid API key. Check MASTER_API_KEY in data/.env.');
+        setError(t('login.error'));
       } else if (!err.response) {
         // Network level: backend still starting, down, or the browser refused
         // the (self-signed) certificate of a cross-origin API.
@@ -47,16 +49,14 @@ export default function ApiKeyGate({ onUnlock, signedOutReason = null }) {
 
           {/* Logo */}
           <div className="flex flex-col items-center mb-7">
-            <div className="w-12 h-12 rounded-lg bg-accent/10 border border-accent/30 flex items-center justify-center mb-4 shadow-glow-accent">
-              <svg className="w-6 h-6 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-              </svg>
+            <div className="w-16 h-16 rounded-lg bg-accent/10 border border-accent/30 flex items-center justify-center mb-4 shadow-glow-accent">
+              <img src="/catdex-logo.svg" alt="CatDex" className="w-12 h-12" />
             </div>
             <h1 className="text-xl font-bold tracking-[0.25em] uppercase text-text">
-              Apex<span className="text-accent">Algo</span>
+              Cat<span className="text-accent">Dex</span>
             </h1>
             <p className="text-[10px] text-faint uppercase tracking-[0.2em] font-num mt-1.5">
-              Quantitative Trading Terminal
+              {t('login.subtitle')}
             </p>
           </div>
 
@@ -66,16 +66,15 @@ export default function ApiKeyGate({ onUnlock, signedOutReason = null }) {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
               <span className="leading-relaxed">
-                Your session was signed out — the backend restarted or the API key changed.
-                Re-enter the key from <span className="font-num">data/.env</span>.
+                {t('login.signedOut')} <span className="font-num">data/.env</span>.
               </span>
             </div>
           )}
 
           <p className="text-xs text-muted text-center mb-6 leading-relaxed">
-            Enter your API key to start a session. You can find it as{' '}
-            <span className="text-text font-num">MASTER_API_KEY</span> in{' '}
-            <span className="text-text font-num">data/.env</span> on the server.
+            {t('login.instructions')}{' '}
+            <span className="text-text font-num">MASTER_API_KEY</span> {t('login.location').replace('no servidor', 'in')}{' '}
+            <span className="text-text font-num">data/.env</span> {t('login.location').includes('servidor') ? '' : t('login.location').replace('in ', '')}.
           </p>
 
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
@@ -87,7 +86,7 @@ export default function ApiKeyGate({ onUnlock, signedOutReason = null }) {
                 type="password"
                 value={keyInput}
                 onChange={(e) => { setKeyInput(e.target.value); if (error) setError(null); }}
-                placeholder="Paste MASTER_API_KEY"
+                placeholder={t('login.placeholder')}
                 autoFocus
                 autoComplete="off"
                 className={`w-full bg-inset border rounded-md pl-10 pr-4 py-3 text-sm text-text placeholder-faint font-num outline-none transition-colors duration-200 ${
@@ -138,7 +137,7 @@ export default function ApiKeyGate({ onUnlock, signedOutReason = null }) {
             )}
 
             <Button type="submit" size="lg" fullWidth loading={checking} disabled={!keyInput.trim()}>
-              {checking ? 'Verifying…' : networkError ? 'Try again' : 'Unlock terminal'}
+              {checking ? t('common.loading') : networkError ? 'Try again' : t('login.button')}
             </Button>
           </form>
         </div>

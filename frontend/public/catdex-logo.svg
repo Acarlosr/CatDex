@@ -1,0 +1,53 @@
+<svg width="200" height="200" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background circle -->
+  <circle cx="100" cy="100" r="95" fill="#0F172A" stroke="#3B82F6" stroke-width="3"/>
+  
+  <!-- Cat head -->
+  <ellipse cx="100" cy="110" rx="45" ry="40" fill="#3B82F6"/>
+  
+  <!-- Left ear -->
+  <path d="M 65 85 L 55 55 L 75 75 Z" fill="#3B82F6"/>
+  <path d="M 65 85 L 60 65 L 72 78 Z" fill="#1E40AF"/>
+  
+  <!-- Right ear -->
+  <path d="M 135 85 L 145 55 L 125 75 Z" fill="#3B82F6"/>
+  <path d="M 135 85 L 140 65 L 128 78 Z" fill="#1E40AF"/>
+  
+  <!-- Left eye -->
+  <ellipse cx="85" cy="105" rx="8" ry="12" fill="#0F172A"/>
+  <ellipse cx="87" cy="103" rx="3" ry="4" fill="#60A5FA"/>
+  
+  <!-- Right eye -->
+  <ellipse cx="115" cy="105" rx="8" ry="12" fill="#0F172A"/>
+  <ellipse cx="117" cy="103" rx="3" ry="4" fill="#60A5FA"/>
+  
+  <!-- Nose -->
+  <path d="M 100 115 L 95 120 L 100 122 L 105 120 Z" fill="#F472B6"/>
+  
+  <!-- Mouth -->
+  <path d="M 100 122 Q 90 128 85 125" stroke="#0F172A" stroke-width="2" fill="none" stroke-linecap="round"/>
+  <path d="M 100 122 Q 110 128 115 125" stroke="#0F172A" stroke-width="2" fill="none" stroke-linecap="round"/>
+  
+  <!-- Whiskers left -->
+  <line x1="55" y1="110" x2="75" y2="108" stroke="#60A5FA" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="55" y1="115" x2="75" y2="115" stroke="#60A5FA" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="55" y1="120" x2="75" y2="122" stroke="#60A5FA" stroke-width="1.5" stroke-linecap="round"/>
+  
+  <!-- Whiskers right -->
+  <line x1="145" y1="110" x2="125" y2="108" stroke="#60A5FA" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="145" y1="115" x2="125" y2="115" stroke="#60A5FA" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="145" y1="120" x2="125" y2="122" stroke="#60A5FA" stroke-width="1.5" stroke-linecap="round"/>
+  
+  <!-- DEX text -->
+  <text x="100" y="165" font-family="monospace" font-size="18" font-weight="bold" fill="#60A5FA" text-anchor="middle">DEX</text>
+  
+  <!-- Chart line decoration -->
+  <path d="M 40 175 L 50 170 L 60 172 L 70 165 L 80 168" stroke="#10B981" stroke-width="2" fill="none" stroke-linecap="round"/>
+  <path d="M 120 168 L 130 165 L 140 172 L 150 170 L 160 175" stroke="#10B981" stroke-width="2" fill="none" stroke-linecap="round"/>
+  
+  <!-- Small circles on chart -->
+  <circle cx="50" cy="170" r="2" fill="#10B981"/>
+  <circle cx="70" cy="165" r="2" fill="#10B981"/>
+  <circle cx="130" cy="165" r="2" fill="#10B981"/>
+  <circle cx="150" cy="170" r="2" fill="#10B981"/>
+</svg>

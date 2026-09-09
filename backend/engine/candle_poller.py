@@ -15,7 +15,7 @@ from backend.models.bots import BotConfig
 from backend.models.candles import Candle
 from backend.models.exchange_keys import ExchangeKey
 
-logger = logging.getLogger("apexalgo.poller")
+logger = logging.getLogger("catdex.poller")
 
 
 class CandlePoller:

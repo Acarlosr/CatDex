@@ -5,6 +5,7 @@ import Settings from './components/Settings';
 import BotManagerUI from './components/BotManagerUI';
 import TradeManager from './components/TradeManager';
 import Home from './components/Home';
+import HowToUse from './views/HowToUse';
 import ApiKeyGate from './components/ApiKeyGate';
 import Toaster from './components/ui/Toast';
 import ConfirmDialogHost from './components/ui/ConfirmDialog';
@@ -331,6 +332,8 @@ export default function App() {
           {activeView === 'bots' && <BotManagerUI bots={allBots} refetchBots={refetchBots} backendOk={backendOk} />}
 
           {activeView === 'trades' && <TradeManager setError={setError} bots={allBots} />}
+
+          {activeView === 'howto' && <HowToUse />}
 
           {openCharts.map(chart => (
             activeView === chart.id && (

@@ -12,7 +12,7 @@ from fastapi.security.api_key import APIKeyHeader
 
 load_dotenv(find_dotenv())
 
-logger = logging.getLogger("apexalgo.security")
+logger = logging.getLogger("catdex.security")
 
 API_KEY = os.getenv("MASTER_API_KEY")
 if not API_KEY:

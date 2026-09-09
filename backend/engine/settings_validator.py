@@ -4,7 +4,7 @@ import re
 from backend.core.exchange_registry import get_exchange_timeframes
 from backend.engine.indicator_registry import get_spec
 
-logger = logging.getLogger("apexalgo.settings_validator")
+logger = logging.getLogger("catdex.settings_validator")
 SYMBOL_PATTERN = re.compile(r'^[A-Z0-9]+/[A-Z0-9]+$')
 MAX_PRICE_OFFSET = 500
 VALID_EXIT_TYPES = {'percentage', 'trailing', 'atr', 'fixed'}

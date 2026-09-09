@@ -13,7 +13,7 @@ from backend.core.security import verify_api_key
 from backend.core.encryption import encrypt_data, decrypt_data
 from backend.core.exchange_registry import build_exchange, build_exchange_from_key, SUPPORTED_EXCHANGES
 
-logger = logging.getLogger("apexalgo.keys")
+logger = logging.getLogger("catdex.keys")
 
 router = APIRouter(
     prefix="/api/keys",

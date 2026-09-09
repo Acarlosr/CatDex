@@ -11,7 +11,7 @@ from backend.engine.indicator_registry import (
     get_spec,
 )
 
-logger = logging.getLogger("apexalgo.evaluator")
+logger = logging.getLogger("catdex.evaluator")
 
 class NodeEvaluator:
     def __init__(self, settings: dict):

@@ -2,7 +2,7 @@ import asyncio
 import logging
 from typing import Dict, List, Any
 
-logger = logging.getLogger("apexalgo.events")
+logger = logging.getLogger("catdex.events")
 
 class EventBus:
     def __init__(self, max_queue_size: int = 1000):
