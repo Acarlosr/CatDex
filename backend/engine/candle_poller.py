@@ -4,6 +4,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from itertools import pairwise
 
 from sqlalchemy.orm import Session
 
@@ -40,6 +41,9 @@ class CandlePoller:
         # Last closed candle ts per (exchange, symbol, timeframe), kept across
         # reconnects so a restarted poll task does not re-publish the same candle.
         self._last_closed_ts: dict[tuple, int] = {}
+        # First candle an exchange serves per (exchange, symbol, timeframe), so
+        # a restart does not probe the listing date again
+        self._listing_start: dict[tuple, int] = {}
 
     # ─────────────────────────────────────────────────────────────────────────
     # Public interface
@@ -135,6 +139,101 @@ class CandlePoller:
     # Historical back-fill
     # ─────────────────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _find_listing_start(exchange, symbol, timeframe, tf_ms, start_ts):
+        """Return the timestamp (ms) of the oldest candle the exchange serves,
+        walking back in 500-candle pages from the newest one. None if the pair
+        has no candles at all. Stops once the page reaches ``start_ts``."""
+        try:
+            batch = exchange.fetch_ohlcv(symbol, timeframe, limit=500)
+        except Exception:
+            return None
+        if not batch:
+            return None
+        first_ts = int(batch[0][0])
+        step = 500  # candles per backwards page; halved when the exchange serves a shorter window
+        for _ in range(64):
+            if first_ts <= start_ts or step < 1:
+                break
+            probe_since = max(first_ts - step * tf_ms, start_ts)
+            time.sleep(0.35)
+            try:
+                older = exchange.fetch_ohlcv(symbol, timeframe, since=probe_since, limit=500)
+            except Exception:
+                break
+            if not older or int(older[0][0]) >= first_ts:
+                # Empty page: either the listing starts inside this window
+                # (OKX only serves ~300 candles after `since`) or we are past
+                # the listing date — narrow the step and try again
+                if probe_since <= start_ts and not older:
+                    break
+                step //= 2
+                continue
+            first_ts = int(older[0][0])
+        return first_ts
+
+    @staticmethod
+    def _repair_gaps(db, exchange, exchange_name, symbol, timeframe, tf_ms, start_ts, now_ms, max_gaps=25) -> int:
+        """Scan the stored range for missing candles and refetch each hole once.
+        Exchanges occasionally return short pages or skip candles around
+        maintenance windows; a strategy evaluated over holes sees wrong
+        indicator values. Returns the number of candles added."""
+        start_dt = datetime.fromtimestamp(start_ts / 1000.0, tz=timezone.utc)
+        rows = db.query(Candle.timestamp).filter(
+            Candle.exchange == exchange_name,
+            Candle.symbol == symbol,
+            Candle.timeframe == timeframe,
+            Candle.timestamp >= start_dt,
+        ).order_by(Candle.timestamp.asc()).all()
+        stamps = [int((r[0].replace(tzinfo=timezone.utc) if r[0].tzinfo is None else r[0]).timestamp() * 1000) for r in rows]
+        if len(stamps) < 2:
+            return 0
+        gaps = [(a, b) for a, b in pairwise(stamps) if b - a > tf_ms]
+        if not gaps:
+            return 0
+        missing = sum((b - a) // tf_ms - 1 for a, b in gaps)
+        logger.info("Back-fill: %s/%s/%s — %d gap(s), %d candles missing; refetching.",
+                    exchange_name, symbol, timeframe, len(gaps), missing)
+        added = 0
+        for a, b in gaps[:max_gaps]:
+            since = a + tf_ms
+            while since < b:
+                time.sleep(0.35)
+                try:
+                    batch = exchange.fetch_ohlcv(symbol, timeframe, since=since, limit=500)
+                except Exception as exc:
+                    logger.warning("Back-fill gap fetch failed %s/%s/%s at %s: %s", exchange_name, symbol, timeframe, since, exc)
+                    break
+                if not batch:
+                    break
+                have = {int((r[0].replace(tzinfo=timezone.utc) if r[0].tzinfo is None else r[0]).timestamp() * 1000)
+                        for r in db.query(Candle.timestamp).filter(
+                            Candle.exchange == exchange_name, Candle.symbol == symbol, Candle.timeframe == timeframe,
+                            Candle.timestamp >= datetime.fromtimestamp(since / 1000.0, tz=timezone.utc),
+                            Candle.timestamp < datetime.fromtimestamp(b / 1000.0, tz=timezone.utc)).all()}
+                new = []
+                for c in batch:
+                    ts = int(c[0])
+                    if ts >= b or ts < since or ts in have or ts + tf_ms > now_ms:
+                        continue
+                    new.append(Candle(exchange=exchange_name, symbol=symbol, timeframe=timeframe,
+                                      timestamp=datetime.fromtimestamp(ts / 1000.0, tz=timezone.utc),
+                                      open=float(c[1]), high=float(c[2]), low=float(c[3]), close=float(c[4]),
+                                      volume=float(c[5]), marketcap=0.0))
+                if new:
+                    db.bulk_save_objects(new)
+                    db.commit()
+                    added += len(new)
+                last = int(batch[-1][0])
+                if last + tf_ms >= b or len(batch) < 2:
+                    break
+                since = last + tf_ms
+        still = missing - added
+        if still > 0:
+            logger.warning("Back-fill: %s/%s/%s — %d candle(s) still missing after gap repair (exchange has no data there; "
+                           "indicators bridge the hole).", exchange_name, symbol, timeframe, still)
+        return added
+
     def _backfill_all(self, subs: dict):
         """Run back-fill for all subscriptions in parallel (one thread per symbol)."""
         tasks = list(subs.items())
@@ -190,8 +289,12 @@ class CandlePoller:
         tf_ms = tf_seconds * 1000
         now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
         start_ts = now_ms - (lookback_limit * tf_ms)
+        known_start = self._listing_start.get((exchange_name, symbol, timeframe))
+        if known_start and known_start > start_ts:
+            start_ts = known_start  # pair is younger than the lookback; skip the empty range
         current_since = start_ts
         total_saved = 0
+        first_seen_ts = None  # oldest candle the exchange returned in this run
 
         db: Session = SessionLocal()
         try:
@@ -202,6 +305,7 @@ class CandlePoller:
             # jump forward past the stored range.
             backward_until_ms = None
             resume_since = None
+            oldest_ms = None
             last_existing = db.query(Candle.timestamp).filter(
                 Candle.exchange == exchange_name,
                 Candle.symbol == symbol,
@@ -258,10 +362,18 @@ class CandlePoller:
                             if probe:
                                 found_start = int(probe[0][0])
                                 break
+                        if not found_start:
+                            # Some exchanges (OKX) return nothing for a `since`
+                            # far before the pair's listing instead of clamping
+                            # to the first candle, so the jumps can miss a young
+                            # pair entirely. Walk backwards from the newest
+                            # candles instead until the exchange runs dry.
+                            found_start = self._find_listing_start(exchange, symbol, timeframe, tf_ms, start_ts)
                         if found_start:
                             logger.info("Back-fill: %s/%s/%s — no data at requested start, found data from %s.",
                                 exchange_name, symbol, timeframe,
                                 datetime.fromtimestamp(found_start / 1000.0, tz=timezone.utc).strftime('%Y-%m-%d'))
+                            self._listing_start[(exchange_name, symbol, timeframe)] = found_start
                             current_since = found_start
                             continue
                         else:
@@ -272,6 +384,8 @@ class CandlePoller:
                 # Deduplicate against DB for this batch's time range
                 batch_start = datetime.fromtimestamp(int(batch[0][0]) / 1000.0, tz=timezone.utc)
                 batch_end = datetime.fromtimestamp(int(batch[-1][0]) / 1000.0, tz=timezone.utc)
+                if first_seen_ts is None or int(batch[0][0]) < first_seen_ts:
+                    first_seen_ts = int(batch[0][0])
 
                 existing_times = {
                     (r[0].replace(tzinfo=timezone.utc) if r[0].tzinfo is None else r[0])
@@ -329,6 +443,26 @@ class CandlePoller:
 
                 current_since = last_ts + 1
                 time.sleep(0.35)
+
+            total_saved += self._repair_gaps(db, exchange, exchange_name, symbol, timeframe, tf_ms, start_ts, now_ms)
+
+            # Less history than requested: either the pair is younger than the
+            # lookback or the exchange caps its OHLC history (Kraken: last 720
+            # candles per timeframe, regardless of `since`). Say so once so a
+            # short backtest is never a silent surprise.
+            requested_start = now_ms - (lookback_limit * tf_ms)
+            oldest_have = min([t for t in (first_seen_ts, oldest_ms) if t is not None], default=None)
+            if oldest_have is not None and oldest_have > requested_start + 2 * tf_ms and known_start != oldest_have:
+                self._listing_start[(exchange_name, symbol, timeframe)] = oldest_have
+                available = (now_ms - oldest_have) // tf_ms
+                cap_note = " (Kraken only serves its most recent 720 candles per timeframe)" if exchange_name == "kraken" else ""
+                logger.warning(
+                    "Back-fill: %s/%s/%s — exchange has no data before %s%s; %d of the requested %d candles are available. "
+                    "Use a larger timeframe or another data exchange for a longer backtest.",
+                    exchange_name, symbol, timeframe,
+                    datetime.fromtimestamp(oldest_have / 1000.0, tz=timezone.utc).strftime('%Y-%m-%d'),
+                    cap_note, available, lookback_limit,
+                )
 
             if total_saved > 0:
                 logger.info(

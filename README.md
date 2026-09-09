@@ -483,6 +483,17 @@ Click **Duplicate** on any stopped bot card to create a clone with `(copy)` appe
 
 Adding support for any other CCXT-compatible exchange requires only adding it to the frontend dropdowns and `SUPPORTED_EXCHANGES` in `exchange_registry.py`.
 
+### Historical data per exchange
+
+Backfill pages through each exchange's OHLCV history, discovers the listing date of young pairs (OKX and Crypto.com return nothing for a `since` before listing instead of clamping), refetches any gaps it finds, and logs a warning when less history is available than the bot's lookback asks for. Limits measured in September 2026:
+
+| Exchange | Candles per request | History |
+| :--- | :--- | :--- |
+| Binance, KuCoin | 1000 | Full history since listing |
+| Bitvavo | 1000 | Full history since listing |
+| OKX, Coinbase, Crypto.com | 300 | Full history since listing (a quote like USDC may be listed years after USDT — check the "exchange has no data before …" warning) |
+| Kraken | 720 | **Only the most recent 720 candles per timeframe**, regardless of the requested start — use a larger timeframe or another data exchange for long backtests |
+
 ---
 
 ## Contributing
