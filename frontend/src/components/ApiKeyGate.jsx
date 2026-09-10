@@ -71,11 +71,11 @@ export default function ApiKeyGate({ onUnlock, signedOutReason = null }) {
             </div>
           )}
 
-          <p className="text-xs text-muted text-center mb-6 leading-relaxed">
-            {t('login.instructions')}{' '}
-            <span className="text-text font-num">MASTER_API_KEY</span> {t('login.location').replace('no servidor', 'in')}{' '}
-            <span className="text-text font-num">data/.env</span> {t('login.location').includes('servidor') ? '' : t('login.location').replace('in ', '')}.
-          </p>
+<p className="text-xs text-muted text-center mb-6 leading-relaxed">
+              {t('login.instructions')}{' '}
+              <span className="text-text font-num">c••••x</span> {t('login.location').replace('no servidor', 'in')}{' '}
+              <span className="text-text font-num">data/.env</span> {t('login.location').includes('servidor') ? '' : t('login.location').replace('in ', '')}.
+            </p>
 
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             <div className="relative">

@@ -16,12 +16,12 @@ export const translations = {
     // Login
     'login.title': 'Bem-vindo ao CatDex',
     'login.subtitle': 'Plataforma de Trading Algorítmico',
-    'login.placeholder': 'Cole sua MASTER_API_KEY',
+    'login.placeholder': 'Cole sua senha (apenas letras)',
     'login.button': 'Entrar',
-    'login.error': 'Chave de API inválida. Verifique MASTER_API_KEY em data/.env',
-    'login.instructions': 'Digite sua chave de API para iniciar uma sessão. Você pode encontrá-la como',
+    'login.error': 'Senha inválida. A senha é apenas letras. Exemplo: catdex',
+    'login.instructions': 'Digite sua senha para iniciar uma sessão. Exemplo: catdex',
     'login.location': 'no servidor.',
-    'login.signedOut': 'Sua sessão foi encerrada — o backend reiniciou ou a chave de API mudou. Digite novamente a chave de',
+    'login.signedOut': 'Sua sessão foi encerrada — o backend reiniciou ou a senha mudou. Digite novamente a senha',
     
     // Common
     'common.loading': 'Carregando...',
@@ -141,12 +141,12 @@ export const translations = {
     // Login
     'login.title': 'Welcome to CatDex',
     'login.subtitle': 'Algorithmic Trading Platform',
-    'login.placeholder': 'Paste your MASTER_API_KEY',
+    'login.placeholder': 'Paste your password (letters only)',
     'login.button': 'Sign In',
-    'login.error': 'Invalid API key. Check MASTER_API_KEY in data/.env',
-    'login.instructions': 'Enter your API key to start a session. You can find it as',
+    'login.error': 'Invalid password. The password is letters only. Example: catdex',
+    'login.instructions': 'Enter your password to start a session. Example: catdex',
     'login.location': 'on the server.',
-    'login.signedOut': 'Your session was signed out — the backend restarted or the API key changed. Re-enter the key from',
+    'login.signedOut': 'Your session was signed out — the backend restarted or the API key changed. Re-enter the password',
     
     // Common
     'common.loading': 'Loading...',
